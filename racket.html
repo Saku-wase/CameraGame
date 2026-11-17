@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>ラケット（スマホ）</title>
+<style>
+html,body{margin:0;height:100%;background:#10263a;color:#fff;font-family:system-ui,"Hiragino Sans",sans-serif;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+body{display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px 16px;box-sizing:border-box;transition:background .15s}
+h1{margin:4px 0 0;font-size:22px}
+#status{font-size:15px;padding:6px 12px;border-radius:20px;background:rgba(255,255,255,.12)}
+#status.ok{background:#1e8c3c}
+#info{min-height:48px;font-size:18px;font-weight:700;text-align:center}
+#score{font-size:15px;opacity:.85;min-height:20px}
+#racket{font-size:96px;line-height:1;transition:transform .08s}
+.meter{width:100%;max-width:340px}
+.meter .lbl{font-size:13px;opacity:.8;margin-bottom:4px}
+.bar{position:relative;height:14px;border-radius:7px;background:rgba(255,255,255,.15);overflow:hidden}
+#pow{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,#4fd16b,#ffe14d,#ff5a3a)}
+#aimdot{position:absolute;top:0;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#dfff4f;left:50%}
+button{font-size:20px;font-weight:700;border:none;border-radius:12px;padding:14px 28px;background:#ff7a1a;color:#fff;width:100%;max-width:340px}
+button.sub{background:rgba(255,255,255,.15);font-size:16px;padding:10px}
+.row{display:flex;gap:10px;width:100%;max-width:340px;justify-content:space-between;align-items:center;font-size:15px}
+select{font-size:16px;padding:6px;border-radius:8px}
+#hint{font-size:13px;opacity:.75;text-align:center;line-height:1.6;max-width:340px}
+.hidden{display:none!important}
+</style>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+<h1>🎾 スマホラケット</h1>
+<div id="status">接続中…</div>
+<div id="racket">🎾</div>
+<div id="info">下のボタンを押してね</div>
+<div id="score"></div>
+
+<button id="go">スタート（センサーON）</button>
+
+<div id="live" class="hidden" style="display:contents">
+  <div class="meter"><div class="lbl">スイングの強さ</div><div class="bar"><div id="pow"></div></div></div>
+  <div class="meter"><div class="lbl">コース（左右に傾ける）</div><div class="bar"><div id="aimdot"></div></div></div>
+  <div class="row">
+    <label>振る強さ
+      <select id="sens">
+        <option value="0.45">軽く振る</option>
+        <option value="0.75" selected>ふつう</option>
+        <option value="1.1">しっかり振る</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="flip"> 左右反転</label>
+  </div>
+  <button class="sub" id="tap">タップでスイング（予備）</button>
+</div>
+
+<div id="hint">画面を自分に向けて縦に持ち、テニスのフォアハンドのように振ってください。<br>手からすっぽ抜けないよう、しっかり握ってね！</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const hostId = new URLSearchParams(location.search).get('id');
+
+// ---------- 接続 ----------
+let peer = null, conn = null, retry = null;
+function setStatus(text, ok) { $('status').textContent = text; $('status').classList.toggle('ok', !!ok); }
+function send(o) { if (conn && conn.open) { try { conn.send(o); } catch (e) {} } }
+function connect() {
+  clearTimeout(retry);
+  if (!hostId) { setStatus('PCの画面のQRコードから開いてください'); return; }
+  if (typeof Peer === 'undefined') { setStatus('通信ライブラリを読み込めませんでした'); return; }
+  if (!peer || peer.destroyed) {
+    peer = new Peer();
+    peer.on('open', connect);
+    peer.on('error', e => { setStatus('接続エラー：' + e.type + '（再接続します）'); retry = setTimeout(connect, 2500); });
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+    return;
+  }
+  if (!peer.open) return;
+  const c = peer.connect(hostId, { serialization: 'json' });
+  c.on('open', () => { conn = c; setStatus('✅ PCと接続中', true); if (started) { $('info').textContent = 'スマホを振って打ち返そう！'; send({ t: 'start' }); } });
+  c.on('data', onData);
+  c.on('close', () => { if (conn === c) { conn = null; setStatus('切断されました（再接続中…）'); retry = setTimeout(connect, 2000); } });
+}
+connect();
+
+function onData(d) {
+  if (!d) return;
+  if (d.t === 'hit') {
+    if (navigator.vibrate) navigator.vibrate(d.q === 2 ? [40, 30, 60] : 50);
+    beep(d.q === 2 ? 1300 : 900);
+    flash(d.q === 2 ? '#7a5a00' : '#1e6b35');
+    $('info').textContent = ['ミスヒット…', 'ナイスショット！', 'パーフェクト！！'][d.q] || 'ヒット！';
+  } else if (d.t === 'info') {
+    $('info').textContent = d.text || '';
+    if (d.score) $('score').textContent = d.score;
+  } else if (d.t === 'state') {
+    if (d.mode === 'result') { $('info').textContent = (d.text || '試合終了') + '　もう一度なら↓'; $('go').textContent = 'もう一度プレイ'; $('go').classList.remove('hidden'); }
+    if (d.mode === 'play') { $('go').classList.add('hidden'); $('score').textContent = ''; }
+  }
+}
+
+// ---------- 音・画面演出（iPhoneは振動しないので音で知らせる） ----------
+let actx = null;
+function beep(freq) {
+  if (!actx) return;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.frequency.value = freq; g.gain.setValueAtTime(0.2, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.13);
+}
+let flashT = null;
+function flash(color) {
+  document.body.style.background = color;
+  clearTimeout(flashT); flashT = setTimeout(() => document.body.style.background = '', 180);
+}
+
+// ---------- センサー ----------
+let sensorsOn = false, aimNow = 0, lastTiltSent = 0, lastTiltVal = 9;
+const aimHist = [];   // スイング直前の傾きを使うための履歴
+let swingState = 0, peak = 0, riseT = 0, cool = 0;
+
+async function enableSensors() {
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const r = await DeviceMotionEvent.requestPermission();
+      if (r !== 'granted') { $('info').textContent = 'モーションセンサーの許可が必要です'; return false; }
+    }
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      await DeviceOrientationEvent.requestPermission().catch(() => {});
+    }
+  } catch (e) { $('info').textContent = 'センサーを有効にできませんでした：' + e.message; return false; }
+  if (!sensorsOn) {
+    addEventListener('devicemotion', onMotion);
+    addEventListener('deviceorientation', onOrient);
+    sensorsOn = true;
+  }
+  return true;
+}
+
+function onOrient(e) {
+  if (e.gamma == null) return;
+  let a = clamp(e.gamma / 35, -1, 1);
+  if ($('flip').checked) a = -a;
+  aimNow = a;
+  const t = performance.now();
+  aimHist.push({ t, a }); while (aimHist.length && t - aimHist[0].t > 600) aimHist.shift();
+  $('aimdot').style.left = (50 + a * 45) + '%';
+  if (t - lastTiltSent > 66 && Math.abs(a - lastTiltVal) > 0.02 && swingState === 0) {
+    lastTiltSent = t; lastTiltVal = a; send({ t: 'tilt', a });
+  }
+}
+function aimBefore(ms) {
+  const t = performance.now() - ms;
+  for (let i = aimHist.length - 1; i >= 0; i--) if (aimHist[i].t <= t) return aimHist[i].a;
+  return aimNow;
+}
+
+function onMotion(e) {
+  const rr = e.rotationRate || {};
+  const rot = Math.hypot(rr.alpha || 0, rr.beta || 0, rr.gamma || 0);
+  let acc = 0;
+  if (e.acceleration && e.acceleration.x != null) acc = Math.hypot(e.acceleration.x, e.acceleration.y, e.acceleration.z);
+  else if (e.accelerationIncludingGravity) { const g = e.accelerationIncludingGravity; acc = Math.abs(Math.hypot(g.x, g.y, g.z) - 9.8); }
+  const s = Math.max(rot / 400, acc / 20);
+  const th = +$('sens').value;
+  const t = performance.now();
+  if (swingState === 0) {
+    if (s > th && t > cool) { swingState = 1; peak = s; riseT = t; }
+  } else {
+    peak = Math.max(peak, s);
+    if (s < peak * 0.8 || t - riseT > 80) {   // ピーク（＝インパクト）で送信
+      swingState = 0; cool = t + 380;
+      fire(0.2 + 0.8 * clamp((peak - th) / (th * 2), 0, 1));
+    }
+  }
+}
+
+function fire(power) {
+  const a = aimBefore(180);
+  send({ t: 'swing', p: power, a });
+  $('pow').style.width = (power * 100) + '%';
+  $('racket').style.transform = 'rotate(-40deg) scale(1.15)';
+  setTimeout(() => $('racket').style.transform = '', 160);
+}
+
+// ---------- ボタン ----------
+let wakeLock = null, started = false;
+async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) {} }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && sensorsOn) keepAwake(); });
+
+$('go').onclick = async () => {
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  actx?.resume?.();
+  const ok = await enableSensors();
+  started = true;
+  keepAwake();
+  $('live').classList.remove('hidden');
+  $('go').classList.add('hidden');
+  if (!conn) { $('info').textContent = 'PCとの接続を待っています…'; }
+  else { $('info').textContent = ok ? 'スマホを振って打ち返そう！' : 'タップでスイングできます'; }
+  send({ t: 'start' });
+};
+$('tap').onclick = () => fire(0.6);
+</script>
+</body>
+</html>
