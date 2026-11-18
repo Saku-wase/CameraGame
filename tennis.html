@@ -343,12 +343,12 @@ function awardPoint(w, reason) {
   else showMsg(gameWon ? (S.over ? 'CPUの勝ち…' : 'CPUがゲーム獲得') : 'CPUのポイント', '#9fd0ff', 1.8);
   showSub(reason, '#fff', 1.8);
   updateScore();
-  send({ t: 'info', text: (w === 0 ? '🎉 ポイント！ ' : '😣 CPUのポイント ') + reason, score: `${S.games[0]}-${S.games[1]}  ${pointText()}` });
+  send({ t: 'info', ev: w === 0 ? 'win' : 'lose', text: (w === 0 ? '🎉 ポイント！ ' : '😣 CPUのポイント ') + reason, score: `${S.games[0]}-${S.games[1]}  ${pointText()}` });
 }
 function fault(reason) {
   ball.live = false; S.faults = 1; S.phase = 'point'; S.timer = 1.4;
   showMsg('フォルト', '#ffcf5a', 1.2); showSub(reason, '#fff', 1.2);
-  send({ t: 'info', text: 'フォルト（' + reason + '）' });
+  send({ t: 'info', ev: 'miss', text: 'フォルト（' + reason + '）' });
 }
 function nextPoint() {
   if (S.over) { endMatch(); return; }
@@ -463,15 +463,15 @@ function playerSwing(power, aimVal) {
   P.swing = 0; sfx('whoosh');
   if (S.phase === 'pserve') {
     if (ball.p.y > 1.8) serveHit(power, aimVal);
-    else showSub('ボールが高い時に振ろう', '#ffcf5a');
+    else { showSub('ボールが高い時に振ろう', '#ffcf5a'); send({ t: 'miss' }); }
     return;
   }
   if (S.phase !== 'rally' || ball.hitter !== 1 || !ball.live || P.pending) return;
   const hz = P.z - CONTACT;
   if (ball.v.z <= 0.5) return;
   const tArr = (hz - ball.p.z) / ball.v.z - 0.03;   // 0.03 = 通信遅延ぶんの補正
-  if (tArr > 0.45) { showSub('早すぎ！', '#ffcf5a'); return; }
-  if (tArr < -0.22) { showSub('遅すぎ！', '#ffcf5a'); return; }
+  if (tArr > 0.45) { showSub('早すぎ！', '#ffcf5a'); send({ t: 'miss' }); return; }
+  if (tArr < -0.22) { showSub('遅すぎ！', '#ffcf5a'); send({ t: 'miss' }); return; }
   P.pending = { power, aim: aimVal, err: -tArr, until: now + Math.max(tArr, 0) + 0.1 };
 }
 function checkPending() {
@@ -480,7 +480,7 @@ function checkPending() {
   P.pending = null;
   if (!ball.live || ball.hitter !== 1) return;
   const dx = ball.p.x - (P.x + 0.55);
-  if (Math.abs(dx) > 1.5 || ball.p.y > 3.0) { showSub('届かない！', '#ffcf5a'); return; }
+  if (Math.abs(dx) > 1.5 || ball.p.y > 3.0) { showSub('届かない！', '#ffcf5a'); send({ t: 'miss' }); return; }
   const e = pd.err, ae = Math.abs(e);
   const q = ae < 0.07 ? 2 : ae < 0.16 ? 1 : 0;
   const dir = clamp(pd.aim + e * 3.2, -1.25, 1.25);

@@ -85,11 +85,14 @@ connect();
 function onData(d) {
   if (!d) return;
   if (d.t === 'hit') {
-    if (navigator.vibrate) navigator.vibrate(d.q === 2 ? [40, 30, 60] : 50);
-    beep(d.q === 2 ? 1300 : 900);
+    haptic(['weak', 'good', 'perfect'][d.q] || 'good');
+    if (!canVibrate) beep(d.q === 2 ? 1300 : 900);
     flash(d.q === 2 ? '#7a5a00' : '#1e6b35');
     $('info').textContent = ['ミスヒット…', 'ナイスショット！', 'パーフェクト！！'][d.q] || 'ヒット！';
+  } else if (d.t === 'miss') {
+    haptic('miss');
   } else if (d.t === 'info') {
+    if (d.ev) haptic(d.ev);
     $('info').textContent = d.text || '';
     if (d.score) $('score').textContent = d.score;
   } else if (d.t === 'state') {
@@ -98,7 +101,18 @@ function onData(d) {
   }
 }
 
-// ---------- 音・画面演出（iPhoneは振動しないので音で知らせる） ----------
+// ---------- 振動 ----------
+// iPhoneアプリ版（ios/）の中では本体の振動機能（Core Haptics）を使い、
+// Androidのブラウザでは Vibration API を使う。どちらも無いときは音で知らせる。
+const nativeHaptic = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.haptic;
+const canVibrate = !!nativeHaptic || typeof navigator.vibrate === 'function';
+const VIBE = { perfect: [40, 30, 70], good: 60, weak: 25, miss: [20, 70, 20], win: [40, 60, 40, 60, 90], lose: 280 };
+function haptic(kind) {
+  if (nativeHaptic) { try { nativeHaptic.postMessage(kind); } catch (e) {} return; }
+  if (navigator.vibrate && VIBE[kind]) navigator.vibrate(VIBE[kind]);
+}
+
+// ---------- 音・画面演出 ----------
 let actx = null;
 function beep(freq) {
   if (!actx) return;

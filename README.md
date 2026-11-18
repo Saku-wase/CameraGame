@@ -5,7 +5,7 @@
 | ゲーム | ファイル | 内容 |
 |---|---|---|
 | リズムポーズ | `index.html` | カメラに映ってビートに合わせてポーズ |
-| スマホラケット・テニス | `tennis.html`（PC）＋ `racket.html`（スマホ） | スマホをラケットにしてCPUとテニス |
+| スマホラケット・テニス | `tennis.html`（PC）＋ `racket.html`（スマホ）／`ios/`（iPhoneアプリ版） | スマホをラケットにしてCPUとテニス |
 
 ## スマホラケット・テニスの遊び方
 
@@ -24,4 +24,5 @@
 ### しくみ
 - スマホとPCは WebRTC（PeerJS）で直接つながります。サーバーの用意は不要です（接続の仲介にPeerJSの公開サーバーを使います）
 - iPhone は https でないとモーションセンサーが使えません
-- ヒット時、Android は振動、iPhone は音で知らせます
+- ヒット時、Android は振動、iPhone のブラウザは音で知らせます
+- iPhone で振動させたい場合は、iPhoneアプリ版（`ios/` フォルダ。手順は [ios/README.md](ios/README.md)）を使ってください
