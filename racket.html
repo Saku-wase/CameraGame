@@ -258,24 +258,27 @@ function onOrient(e) {
   let x = clamp(e.gamma / gx, -1, 1);
   if ($('flip').checked) x = -x;
   const y = clamp((beta0 - e.beta) / by, -1, 1);   // 画面の上側を奥へ倒すと beta が小さくなる → 深い
-  aimNow = { x, y };
+  // 手の小さな震えで狙いがぶれないように、なめらかにする
+  const k = 0.3;
+  aimNow = { x: aimNow.x + (x - aimNow.x) * k, y: aimNow.y + (y - aimNow.y) * k };
   const t = performance.now();
-  aimHist.push({ t, a: aimNow }); while (aimHist.length && t - aimHist[0].t > 600) aimHist.shift();
-  $('aimdot').style.left = (50 + x * 44) + '%';
-  $('aimdot').style.top = (50 - y * 42) + '%';
+  aimHist.push({ t, a: aimNow }); while (aimHist.length && t - aimHist[0].t > 1500) aimHist.shift();
+  if (moving) return;   // 振っている最中は狙いの表示も送信も止める（構えた時の狙いのまま）
+  $('aimdot').style.left = (50 + aimNow.x * 44) + '%';
+  $('aimdot').style.top = (50 - aimNow.y * 42) + '%';
   if (t - lastAimSent > 66 && swingState === 0 &&
-      (Math.abs(x - lastAimVal.x) > 0.02 || Math.abs(y - lastAimVal.y) > 0.02)) {
-    lastAimSent = t; lastAimVal = aimNow; send({ t: 'aim', x, y });
+      (Math.abs(aimNow.x - lastAimVal.x) > 0.02 || Math.abs(aimNow.y - lastAimVal.y) > 0.02)) {
+    lastAimSent = t; lastAimVal = aimNow; send({ t: 'aim', x: aimNow.x, y: aimNow.y });
   }
 }
-function aimBefore(ms) {
-  const t = performance.now() - ms;
+function aimAt(t) {
   for (let i = aimHist.length - 1; i >= 0; i--) if (aimHist[i].t <= t) return aimHist[i].a;
   return aimNow;
 }
 
 // ---------- スイング検出 ----------
 let swingState = 0, peak = 0, peakRot = 0, peakAcc = 0, riseT = 0, cool = 0, hasGyro = false;
+let calmT = 0, moving = false;   // calmT：スマホが最後に「構えて静止していた」時刻。狙いはこの時の傾きを使う
 // スイングの速さ（km/h）の目安：
 //   スマホの回転の速さ（角速度）× 肩からラケットの芯までの長さ（約1.1m）＝ ラケットの芯の速さ
 //   ジャイロが無い端末では加速度から大まかに見積もる
@@ -317,6 +320,8 @@ function onMotion(e) {
   const s = Math.max(rot / 400, acc / 20);
   const th = +$('sens').value;
   const t = performance.now();
+  moving = s >= th * 0.3;
+  if (!moving) calmT = t;   // テイクバックが始まる前＝狙いを決めて構えている状態
   if (swingState === 0) {
     if (s > th && t > cool) { swingState = 1; peak = s; peakRot = rot; peakAcc = acc; riseT = t; }
   } else {
@@ -331,7 +336,9 @@ function onMotion(e) {
 }
 
 function fire(power, kmh) {
-  const a = aimBefore(180);   // 振り始める前の傾きで狙う
+  // テイクバックを始める直前（最後に静止していた瞬間の少し前）の傾きで狙う。
+  // 振っている間の手首の回転で狙いがずれないようにするため。
+  const a = aimAt(Math.min(calmT, performance.now()) - 50);
   const msg = { t: 'swing', p: +power.toFixed(3), a };
   if (kmh) {
     msg.v = Math.round(kmh);
