@@ -5,30 +5,43 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>ラケット（スマホ）</title>
 <style>
-html,body{margin:0;height:100%;background:#10263a;color:#fff;font-family:system-ui,"Hiragino Sans",sans-serif;-webkit-user-select:none;user-select:none;touch-action:manipulation}
-body{display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px 16px;box-sizing:border-box;transition:background .15s}
+html,body{margin:0;height:100%;background:#10263a;color:#fff;font-family:system-ui,"Hiragino Sans",sans-serif;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation;overscroll-behavior:none}
+body{display:flex;flex-direction:column;align-items:center;gap:12px;padding:14px 16px;box-sizing:border-box;transition:background .15s}
 h1{margin:4px 0 0;font-size:22px}
-#status{font-size:15px;padding:6px 12px;border-radius:20px;background:rgba(255,255,255,.12)}
+#status{font-size:14px;padding:5px 12px;border-radius:20px;background:rgba(255,255,255,.12)}
 #status.ok{background:#1e8c3c}
-#info{min-height:48px;font-size:18px;font-weight:700;text-align:center}
-#score{font-size:15px;opacity:.85;min-height:20px}
+#info{min-height:26px;font-size:17px;font-weight:700;text-align:center}
+#score{font-size:14px;opacity:.85;min-height:18px}
 #racket{font-size:96px;line-height:1;transition:transform .08s}
-.meter{width:100%;max-width:340px}
-.meter .lbl{font-size:13px;opacity:.8;margin-bottom:4px}
-.bar{position:relative;height:14px;border-radius:7px;background:rgba(255,255,255,.15);overflow:hidden}
+.lbl{font-size:12px;opacity:.8;margin-bottom:4px}
+.bar{position:relative;height:12px;border-radius:6px;background:rgba(255,255,255,.15);overflow:hidden}
 #pow{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,#4fd16b,#ffe14d,#ff5a3a)}
-#aimdot{position:absolute;top:0;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#dfff4f;left:50%}
 button{font-size:20px;font-weight:700;border:none;border-radius:12px;padding:14px 28px;background:#ff7a1a;color:#fff;width:100%;max-width:340px}
-button.sub{background:rgba(255,255,255,.15);font-size:16px;padding:10px}
-.row{display:flex;gap:10px;width:100%;max-width:340px;justify-content:space-between;align-items:center;font-size:15px}
+button.sub{background:rgba(255,255,255,.15);font-size:14px;padding:9px 6px;border-radius:10px}
 select{font-size:16px;padding:6px;border-radius:8px}
 #hint{font-size:13px;opacity:.75;text-align:center;line-height:1.6;max-width:340px}
 .hidden{display:none!important}
+
+#live{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:360px;flex:1}
+.top{display:flex;gap:14px;width:100%;align-items:stretch}
+/* 狙い：相手コートを上から見た図。上がベースライン（深い）、下がネット（浅い） */
+#aimpad{position:relative;width:108px;height:146px;border:2px solid #fff;border-radius:4px;background:#2f63b0;flex:none}
+#aimpad::before{content:"";position:absolute;left:0;right:0;top:45%;height:2px;background:rgba(255,255,255,.7)}
+#aimpad::after{content:"NET";position:absolute;left:-2px;right:-2px;bottom:-14px;height:12px;border-top:4px solid #fff;font-size:9px;text-align:center;opacity:.8}
+#aimdot{position:absolute;top:50%;left:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:#dfff4f;box-shadow:0 0 10px #dfff4f}
+.side{flex:1;display:flex;flex-direction:column;gap:8px;justify-content:space-between}
+/* 移動スティック */
+#stick{position:relative;width:min(68vw,250px);height:min(68vw,250px);border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.08),rgba(255,255,255,.18));border:2px solid rgba(255,255,255,.35);touch-action:none;margin-top:auto}
+#stick::before{content:"移動";position:absolute;top:8px;width:100%;text-align:center;font-size:12px;opacity:.6}
+#knob{position:absolute;left:50%;top:50%;width:38%;height:38%;margin:-19% 0 0 -19%;border-radius:50%;background:#ff7a1a;box-shadow:0 4px 12px rgba(0,0,0,.4);pointer-events:none}
+details{width:100%;font-size:14px}
+summary{opacity:.8;padding:4px 0}
+.row{display:flex;gap:10px;justify-content:space-between;align-items:center;margin:8px 0}
 </style>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
-<h1>🎾 スマホラケット</h1>
+<h1 id="title">🎾 スマホラケット</h1>
 <div id="status">接続中…</div>
 <div id="racket">🎾</div>
 <div id="info">下のボタンを押してね</div>
@@ -36,34 +49,52 @@ select{font-size:16px;padding:6px;border-radius:8px}
 
 <button id="go">スタート（センサーON）</button>
 
-<div id="live" class="hidden" style="display:contents">
-  <div class="meter"><div class="lbl">スイングの強さ</div><div class="bar"><div id="pow"></div></div></div>
-  <div class="meter"><div class="lbl">コース（左右に傾ける）</div><div class="bar"><div id="aimdot"></div></div></div>
-  <div class="row">
-    <label>振る強さ
-      <select id="sens">
-        <option value="0.45">軽く振る</option>
-        <option value="0.75" selected>ふつう</option>
-        <option value="1.1">しっかり振る</option>
-      </select>
-    </label>
-    <label><input type="checkbox" id="flip"> 左右反転</label>
+<div id="live" class="hidden">
+  <div class="top">
+    <div>
+      <div class="lbl">狙い（傾ける）</div>
+      <div id="aimpad"><div id="aimdot"></div></div>
+    </div>
+    <div class="side">
+      <div><div class="lbl">スイングの強さ</div><div class="bar"><div id="pow"></div></div></div>
+      <button class="sub" id="view">👁 視点切替（一人称／三人称）</button>
+      <button class="sub" id="calib">↺ 傾きの基準をリセット</button>
+      <button class="sub" id="tap">タップでスイング（予備）</button>
+    </div>
   </div>
-  <div class="row">
-    <label>振動
-      <select id="vstr">
-        <option value="1" selected>強</option>
-        <option value="0.7">中</option>
-        <option value="0.45">弱</option>
-        <option value="0">なし</option>
-      </select>
-    </label>
-    <label><input type="checkbox" id="cue"> 振りどきの合図</label>
-  </div>
-  <button class="sub" id="tap">タップでスイング（予備）</button>
+
+  <div id="stick"><div id="knob"></div></div>
+
+  <details>
+    <summary>設定</summary>
+    <div class="row">
+      <label>振る強さ
+        <select id="sens">
+          <option value="0.45">軽く振る</option>
+          <option value="0.75" selected>ふつう</option>
+          <option value="1.1">しっかり振る</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="flip"> 左右反転</label>
+    </div>
+    <div class="row">
+      <label>振動
+        <select id="vstr">
+          <option value="1" selected>強</option>
+          <option value="0.7">中</option>
+          <option value="0.45">弱</option>
+          <option value="0">なし</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="cue"> 振りどきの合図</label>
+    </div>
+  </details>
 </div>
 
-<div id="hint">画面を自分に向けて縦に持ち、テニスのフォアハンドのように振ってください。<br>手からすっぽ抜けないよう、しっかり握ってね！</div>
+<div id="hint">画面を自分に向けて縦に持ち、親指をスティックに置いてください。<br>
+スティックで移動 → ボールが来たらスマホを振って打つ！<br>
+左右に傾ける＝左右、奥に倒す＝深い球、手前に倒す＝浅い球。<br>
+手からすっぽ抜けないよう、しっかり握ってね！</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -87,7 +118,7 @@ function connect() {
   }
   if (!peer.open) return;
   const c = peer.connect(hostId, { serialization: 'json' });
-  c.on('open', () => { conn = c; setStatus('✅ PCと接続中', true); if (started) { $('info').textContent = 'スマホを振って打ち返そう！'; send({ t: 'start' }); } });
+  c.on('open', () => { conn = c; setStatus('✅ PCと接続中', true); if (started) { $('info').textContent = 'スティックで動いて、振って打とう！'; send({ t: 'start' }); } });
   c.on('data', onData);
   c.on('close', () => { if (conn === c) { conn = null; setStatus('切断されました（再接続中…）'); retry = setTimeout(connect, 2000); } });
 }
@@ -166,9 +197,36 @@ function flash(color) {
   clearTimeout(flashT); flashT = setTimeout(() => document.body.style.background = '', 180);
 }
 
-// ---------- センサー ----------
-let sensorsOn = false, aimNow = 0, lastTiltSent = 0, lastTiltVal = 9;
+// ---------- 狙い（傾き） ----------
+// x：左右に傾ける（gamma）、y：奥に倒すと深い球／手前に倒すと浅い球（beta の基準からの差）
+let sensorsOn = false, betaNow = null, beta0 = null, calibPending = true;
+let aimNow = { x: 0, y: 0 }, lastAimSent = 0, lastAimVal = { x: 9, y: 9 };
 const aimHist = [];   // スイング直前の傾きを使うための履歴
+
+function onOrient(e) {
+  if (e.gamma == null || e.beta == null) return;
+  betaNow = e.beta;
+  if (calibPending) { beta0 = e.beta; calibPending = false; }
+  let x = clamp(e.gamma / 35, -1, 1);
+  if ($('flip').checked) x = -x;
+  const y = clamp((beta0 - e.beta) / 25, -1, 1);   // 画面の上側を奥へ倒すと beta が小さくなる → 深い
+  aimNow = { x, y };
+  const t = performance.now();
+  aimHist.push({ t, a: aimNow }); while (aimHist.length && t - aimHist[0].t > 600) aimHist.shift();
+  $('aimdot').style.left = (50 + x * 44) + '%';
+  $('aimdot').style.top = (50 - y * 42) + '%';
+  if (t - lastAimSent > 66 && swingState === 0 &&
+      (Math.abs(x - lastAimVal.x) > 0.02 || Math.abs(y - lastAimVal.y) > 0.02)) {
+    lastAimSent = t; lastAimVal = aimNow; send({ t: 'aim', x, y });
+  }
+}
+function aimBefore(ms) {
+  const t = performance.now() - ms;
+  for (let i = aimHist.length - 1; i >= 0; i--) if (aimHist[i].t <= t) return aimHist[i].a;
+  return aimNow;
+}
+
+// ---------- スイング検出 ----------
 let swingState = 0, peak = 0, riseT = 0, cool = 0;
 
 async function enableSensors() {
@@ -187,24 +245,6 @@ async function enableSensors() {
     sensorsOn = true;
   }
   return true;
-}
-
-function onOrient(e) {
-  if (e.gamma == null) return;
-  let a = clamp(e.gamma / 35, -1, 1);
-  if ($('flip').checked) a = -a;
-  aimNow = a;
-  const t = performance.now();
-  aimHist.push({ t, a }); while (aimHist.length && t - aimHist[0].t > 600) aimHist.shift();
-  $('aimdot').style.left = (50 + a * 45) + '%';
-  if (t - lastTiltSent > 66 && Math.abs(a - lastTiltVal) > 0.02 && swingState === 0) {
-    lastTiltSent = t; lastTiltVal = a; send({ t: 'tilt', a });
-  }
-}
-function aimBefore(ms) {
-  const t = performance.now() - ms;
-  for (let i = aimHist.length - 1; i >= 0; i--) if (aimHist[i].t <= t) return aimHist[i].a;
-  return aimNow;
 }
 
 function onMotion(e) {
@@ -228,12 +268,44 @@ function onMotion(e) {
 }
 
 function fire(power) {
-  const a = aimBefore(180);
+  const a = aimBefore(180);   // 振り始める前の傾きで狙う
   send({ t: 'swing', p: power, a });
   $('pow').style.width = (power * 100) + '%';
-  $('racket').style.transform = 'rotate(-40deg) scale(1.15)';
-  setTimeout(() => $('racket').style.transform = '', 160);
 }
+
+// ---------- 移動スティック ----------
+const stickEl = $('stick'), knob = $('knob');
+let stickId = null, stickVec = { x: 0, y: 0 }, stickTimer = null;
+function stickFrom(e) {
+  const r = stickEl.getBoundingClientRect();
+  const R = r.width / 2;
+  let x = (e.clientX - (r.left + R)) / (R * 0.7);
+  let y = (e.clientY - (r.top + R)) / (R * 0.7);
+  const m = Math.hypot(x, y);
+  if (m > 1) { x /= m; y /= m; }
+  knob.style.transform = `translate(${x * R * 0.6}px, ${y * R * 0.6}px)`;
+  const dead = 0.12;   // 親指を置いただけでは動かないように
+  const mm = Math.hypot(x, y);
+  const k = mm < dead ? 0 : (mm - dead) / (1 - dead) / mm;
+  stickVec = { x: x * k, y: -y * k };   // 上に倒す＝前（ネット方向）
+}
+function sendStick() { send({ t: 'stick', x: +stickVec.x.toFixed(2), y: +stickVec.y.toFixed(2) }); }
+stickEl.addEventListener('pointerdown', e => {
+  if (stickId !== null) return;
+  stickId = e.pointerId; stickEl.setPointerCapture(e.pointerId);
+  stickFrom(e); sendStick();
+  clearInterval(stickTimer); stickTimer = setInterval(sendStick, 50);   // 押している間は送り続ける
+  e.preventDefault();
+});
+stickEl.addEventListener('pointermove', e => { if (e.pointerId === stickId) stickFrom(e); });
+function stickEnd(e) {
+  if (e.pointerId !== stickId) return;
+  stickId = null; clearInterval(stickTimer);
+  stickVec = { x: 0, y: 0 }; knob.style.transform = '';
+  sendStick(); setTimeout(sendStick, 60);   // 止まる合図は念のため2回
+}
+stickEl.addEventListener('pointerup', stickEnd);
+stickEl.addEventListener('pointercancel', stickEnd);
 
 // ---------- ボタン ----------
 let wakeLock = null, started = false;
@@ -245,14 +317,18 @@ $('go').onclick = async () => {
   actx?.resume?.();
   const ok = await enableSensors();
   started = true;
+  calibPending = true;   // いまの持ち方を「まっすぐ」とする
   keepAwake();
+  for (const id of ['title', 'racket', 'hint']) $(id).classList.add('hidden');
   $('live').classList.remove('hidden');
   $('go').classList.add('hidden');
   if (!conn) { $('info').textContent = 'PCとの接続を待っています…'; }
-  else { $('info').textContent = ok ? 'スマホを振って打ち返そう！' : 'タップでスイングできます'; }
+  else { $('info').textContent = ok ? 'スティックで動いて、振って打とう！' : 'タップでスイングできます'; }
   send({ t: 'start' });
 };
 $('tap').onclick = () => fire(0.6);
+$('view').onclick = () => send({ t: 'view' });
+$('calib').onclick = () => { calibPending = true; $('info').textContent = '今の持ち方を「まっすぐ」にしました'; };
 
 // 設定を覚えておく（使えない環境でも動くように try で囲む）
 for (const id of ['sens', 'flip', 'vstr', 'cue']) {
