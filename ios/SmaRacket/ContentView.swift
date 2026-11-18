@@ -54,13 +54,8 @@ struct ContentView: View {
                     Text(errorText).font(.footnote).foregroundStyle(.red)
                 }
 
-                Button {
-                    Haptics.shared.play(.perfect)
-                } label: {
-                    Label("振動テスト", systemImage: "iphone.radiowaves.left.and.right")
-                }
-                .buttonStyle(.bordered)
-                .padding(.top, 10)
+                HapticSampler()
+                    .padding(.top, 10)
 
                 Text("iPhoneの「設定」→「サウンドと触覚」→「システムの触覚」がオフだと振動しません。")
                     .font(.caption)
@@ -97,6 +92,56 @@ struct ContentView: View {
               comps.queryItems?.contains(where: { $0.name == "id" && !($0.value ?? "").isEmpty }) == true
         else { return nil }
         return comps.url
+    }
+}
+
+/// 振動を1つずつ試せる見本帳
+struct HapticSampler: View {
+    private struct Sample: Identifiable {
+        let id = UUID()
+        let title: String
+        let kind: Haptics.Kind
+        var params = Haptics.Params()
+    }
+
+    private static func hit(_ q: Int, _ p: Float, _ o: Float) -> Haptics.Params {
+        var params = Haptics.Params()
+        params.quality = q
+        params.power = p
+        params.offCenter = o
+        return params
+    }
+
+    private static let samples: [Sample] = [
+        Sample(title: "パーフェクト", kind: .hit, params: hit(2, 1.0, 0.0)),
+        Sample(title: "ナイス（強打）", kind: .hit, params: hit(1, 0.9, 0.2)),
+        Sample(title: "ナイス（軽打）", kind: .hit, params: hit(1, 0.3, 0.6)),
+        Sample(title: "ミスヒット", kind: .hit, params: hit(0, 0.6, 0.9)),
+        Sample(title: "空振り", kind: .miss),
+        Sample(title: "バウンド", kind: .bounce),
+        Sample(title: "ネット", kind: .net),
+        Sample(title: "ポイント", kind: .win),
+        Sample(title: "失点", kind: .lose),
+        Sample(title: "ゲーム獲得", kind: .gameWin),
+        Sample(title: "ゲームを取られた", kind: .gameLose),
+        Sample(title: "勝利", kind: .matchWin),
+        Sample(title: "敗北", kind: .matchLose),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("振動の見本", systemImage: "iphone.radiowaves.left.and.right")
+                .font(.headline)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 8)], spacing: 8) {
+                ForEach(Self.samples) { sample in
+                    Button(sample.title) {
+                        Haptics.shared.play(sample.kind, sample.params)
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
     }
 }
 

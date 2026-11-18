@@ -34,9 +34,7 @@ struct GameWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler, WKUIDelegate {
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
-            guard let name = message.body as? String,
-                  let kind = Haptics.Kind(rawValue: name) else { return }
-            Haptics.shared.play(kind)
+            Haptics.shared.play(message: message.body)
         }
 
         /// モーションセンサーの許可ダイアログを毎回出さずに許可する（アプリ自体が許可を説明済みのため）

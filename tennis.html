@@ -343,12 +343,13 @@ function awardPoint(w, reason) {
   else showMsg(gameWon ? (S.over ? 'CPUの勝ち…' : 'CPUがゲーム獲得') : 'CPUのポイント', '#9fd0ff', 1.8);
   showSub(reason, '#fff', 1.8);
   updateScore();
-  send({ t: 'info', ev: w === 0 ? 'win' : 'lose', text: (w === 0 ? '🎉 ポイント！ ' : '😣 CPUのポイント ') + reason, score: `${S.games[0]}-${S.games[1]}  ${pointText()}` });
+  const ev = gameWon ? (S.over ? (w === 0 ? 'matchWin' : 'matchLose') : (w === 0 ? 'gameWin' : 'gameLose')) : (w === 0 ? 'win' : 'lose');
+  send({ t: 'info', ev, text: (w === 0 ? '🎉 ポイント！ ' : '😣 CPUのポイント ') + reason, score: `${S.games[0]}-${S.games[1]}  ${pointText()}` });
 }
 function fault(reason) {
   ball.live = false; S.faults = 1; S.phase = 'point'; S.timer = 1.4;
   showMsg('フォルト', '#ffcf5a', 1.2); showSub(reason, '#fff', 1.2);
-  send({ t: 'info', ev: 'miss', text: 'フォルト（' + reason + '）' });
+  send({ t: 'info', ev: 'fault', text: 'フォルト（' + reason + '）' });
 }
 function nextPoint() {
   if (S.over) { endMatch(); return; }
@@ -376,6 +377,7 @@ function physics(dt) {
     p.z = Math.sign(pz) * R * 1.2;
     v.z *= -0.15; v.x *= 0.3; v.y = Math.min(v.y, 0) * 0.3;
     ball.netted = true; sfx('net');
+    if (ball.hitter === 0) send({ t: 'fx', kind: 'net' });
     showSub('ネット！', '#ffcf5a');
   }
   if (p.y < R) {
@@ -406,6 +408,7 @@ function onBounce(imp) {
       return;
     }
     ball.bounces = 1;
+    if (side === 0) send({ t: 'fx', kind: 'bounce' });   // 相手の球が手前で弾んだ
   } else {
     awardPoint(h, h === 0 ? (ball.serve ? 'サービスエース！' : 'ウィナー！') : (ball.serve ? 'サービスエースを取られた' : '返せなかった…'));
   }
@@ -454,6 +457,7 @@ function hitBall(who, tx, tz, speed, { clear = 0.2, intoNet = false } = {}) {
   ball.hitter = who; ball.bounces = 0; ball.live = true; ball.serve = false; ball.netted = false;
   S.phase = 'rally'; S.rallyT = 0;
   C.done = false; C.plan = null; C.planT = 0;
+  ball.cued = false;
   sfx('hit', 0.6 + speed / 40);
 }
 
@@ -482,6 +486,7 @@ function checkPending() {
   const dx = ball.p.x - (P.x + 0.55);
   if (Math.abs(dx) > 1.5 || ball.p.y > 3.0) { showSub('届かない！', '#ffcf5a'); send({ t: 'miss' }); return; }
   const e = pd.err, ae = Math.abs(e);
+  const off = clamp(Math.abs(dx) / 1.5 * 0.6 + ae / 0.22 * 0.4, 0, 1);   // スイートスポットからのずれ
   const q = ae < 0.07 ? 2 : ae < 0.16 ? 1 : 0;
   const dir = clamp(pd.aim + e * 3.2, -1.25, 1.25);
   const noise = [0.85, 0.4, 0.15][q];
@@ -491,15 +496,17 @@ function checkPending() {
   hitBall(0, tx, tz, spd);
   zoneRing.material.color.set(0x55ff77); zoneRing.material.opacity = 0.9;
   showSub(['ミスヒット…', 'ナイスショット！', 'パーフェクト！！'][q], ['#ffb3b3', '#ffffff', '#ffe14d'][q], 0.9);
-  send({ t: 'hit', q });
+  send({ t: 'hit', q, p: pd.power, o: off });
 }
 function serveHit(power, aimVal) {
   const sgn = Math.sign(P.x) || 1;
   const tx = clamp(-sgn * 2.0 + aimVal * 1.8, -HW + 0.3, HW - 0.3) + randn() * (0.2 + 0.3 * power);
   const tz = -(4.6 + 1.0 * power) + randn() * 0.3 * power;
-  hitBall(0, tx, tz, 13 + 13 * power, { clear: 0.12 });
+  const off = clamp(Math.abs(ball.p.y - 2.9) / 1.1, 0, 1);   // トスの一番高いところで打つほど芯
+  const q = off < 0.15 ? 2 : 1;
+  hitBall(0, tx, tz, 13 + 13 * power + (q === 2 ? 2 : 0), { clear: 0.12 });
   ball.serve = true;
-  send({ t: 'hit', q: 1 });
+  send({ t: 'hit', q, p: power, o: off });
 }
 
 // ---------- CPU ----------
@@ -635,6 +642,7 @@ function frame(t) {
   if (S.phase === 'rally' && ball.hitter === 1 && ball.v.z > 0) {
     const tA = (P.z - CONTACT - ball.p.z) / ball.v.z;
     hot = tA < 0.32 && tA > -0.15;
+    if (!ball.cued && tA < 0.18 && tA > 0) { ball.cued = true; send({ t: 'fx', kind: 'cue' }); }   // 振りどきの合図（スマホ側で使うか選べる）
   }
   if (S.phase === 'pserve') hot = ball.p.y > 1.8;
   if (zoneRing.material.color.getHex() === 0x55ff77 && zoneRing.material.opacity > 0.3) zoneRing.material.opacity -= dt * 1.2;

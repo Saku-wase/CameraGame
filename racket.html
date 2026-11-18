@@ -49,6 +49,17 @@ select{font-size:16px;padding:6px;border-radius:8px}
     </label>
     <label><input type="checkbox" id="flip"> 左右反転</label>
   </div>
+  <div class="row">
+    <label>振動
+      <select id="vstr">
+        <option value="1" selected>強</option>
+        <option value="0.7">中</option>
+        <option value="0.45">弱</option>
+        <option value="0">なし</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="cue"> 振りどきの合図</label>
+  </div>
   <button class="sub" id="tap">タップでスイング（予備）</button>
 </div>
 
@@ -85,12 +96,15 @@ connect();
 function onData(d) {
   if (!d) return;
   if (d.t === 'hit') {
-    haptic(['weak', 'good', 'perfect'][d.q] || 'good');
+    haptic('hit', { q: d.q ?? 1, p: d.p ?? 0.6, o: d.o ?? 0.3 });
     if (!canVibrate) beep(d.q === 2 ? 1300 : 900);
     flash(d.q === 2 ? '#7a5a00' : '#1e6b35');
     $('info').textContent = ['ミスヒット…', 'ナイスショット！', 'パーフェクト！！'][d.q] || 'ヒット！';
   } else if (d.t === 'miss') {
     haptic('miss');
+  } else if (d.t === 'fx') {
+    if (d.kind === 'cue' && !$('cue').checked) return;
+    haptic(d.kind);
   } else if (d.t === 'info') {
     if (d.ev) haptic(d.ev);
     $('info').textContent = d.text || '';
@@ -106,10 +120,36 @@ function onData(d) {
 // Androidのブラウザでは Vibration API を使う。どちらも無いときは音で知らせる。
 const nativeHaptic = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.haptic;
 const canVibrate = !!nativeHaptic || typeof navigator.vibrate === 'function';
-const VIBE = { perfect: [40, 30, 70], good: 60, weak: 25, miss: [20, 70, 20], win: [40, 60, 40, 60, 90], lose: 280 };
-function haptic(kind) {
-  if (nativeHaptic) { try { nativeHaptic.postMessage(kind); } catch (e) {} return; }
-  if (navigator.vibrate && VIBE[kind]) navigator.vibrate(VIBE[kind]);
+// Android 用：強弱は指定できないので、長さと細かい断続（短く刻むほど弱く感じる）で表現する
+const VIBE = {
+  miss: [4, 14, 6, 14, 4],                         // 空気を切る「スッ」
+  bounce: [8],                                     // 手前で弾む「トッ」
+  net: [45],                                       // ネット「ボスッ」
+  fault: [20, 130, 20],
+  cue: [6],                                        // 振りどきの合図「チッ」
+  win: [14, 90, 20, 55, 30, 20, 45],               // 間隔が詰まって強く
+  lose: [110, 25, 55, 25, 25, 25, 10],             // しぼむ
+  gameWin: [40, 90, 40, 90, 170],                  // タ・タ・ターン
+  gameLose: [140, 160, 200],                       // ため息2回
+  matchWin: [10, 40, 12, 38, 14, 34, 16, 30, 18, 26, 20, 22, 320],   // ドラムロール→フィニッシュ
+  matchLose: [60, 120, 35, 600, 40, 120, 20],      // 弱まる鼓動
+};
+function hitPattern({ q, p, o }) {
+  if (q === 2) return [16 + 10 * p, 45, 8];                    // 鋭い衝撃＋澄んだ反響
+  if (q === 1) return o > 0.5 ? [14 + 14 * p + 20 * o, 30, 8]  // 少しフレームに掛かった
+                              : [14 + 14 * p + 20 * o];
+  return [28, 14, 10, 14, 7, 14, 4];                           // 鈍い当たり＋カタカタ
+}
+function vibeScale() { return +$('vstr').value; }
+function haptic(kind, extra = {}) {
+  const scale = vibeScale();
+  if (scale <= 0) return;
+  if (nativeHaptic) { try { nativeHaptic.postMessage({ kind, scale, ...extra }); } catch (e) {} return; }
+  if (!navigator.vibrate) return;
+  const pat = kind === 'hit' ? hitPattern(extra) : VIBE[kind];
+  if (!pat) return;
+  // 振動している区間（偶数番目）だけ強さの設定で短くする
+  navigator.vibrate(pat.map((ms, i) => Math.round(i % 2 ? ms : Math.max(4, ms * scale))));
 }
 
 // ---------- 音・画面演出 ----------
@@ -213,6 +253,19 @@ $('go').onclick = async () => {
   send({ t: 'start' });
 };
 $('tap').onclick = () => fire(0.6);
+
+// 設定を覚えておく（使えない環境でも動くように try で囲む）
+for (const id of ['sens', 'flip', 'vstr', 'cue']) {
+  const el = $(id), key = 'racket.' + id;
+  try {
+    const v = localStorage.getItem(key);
+    if (v !== null) { if (el.type === 'checkbox') el.checked = v === '1'; else el.value = v; }
+  } catch (e) {}
+  el.addEventListener('change', () => {
+    try { localStorage.setItem(key, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value); } catch (e) {}
+    if (id === 'vstr') haptic('hit', { q: 2, p: 0.8, o: 0 });   // 強さを変えたらその場で確かめられる
+  });
+}
 </script>
 </body>
 </html>
