@@ -31,12 +31,18 @@ select{font-size:16px;padding:6px;border-radius:8px}
 #aimdot{position:absolute;top:50%;left:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:#dfff4f;box-shadow:0 0 10px #dfff4f}
 .side{flex:1;display:flex;flex-direction:column;gap:8px;justify-content:space-between}
 /* 移動スティック */
-#stick{position:relative;width:min(68vw,250px);height:min(68vw,250px);border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.08),rgba(255,255,255,.18));border:2px solid rgba(255,255,255,.35);touch-action:none;margin-top:auto}
-#stick::before{content:"移動";position:absolute;top:8px;width:100%;text-align:center;font-size:12px;opacity:.6}
-#knob{position:absolute;left:50%;top:50%;width:38%;height:38%;margin:-19% 0 0 -19%;border-radius:50%;background:#ff7a1a;box-shadow:0 4px 12px rgba(0,0,0,.4);pointer-events:none}
+/* 移動スティック：この範囲のどこに親指を置いても、そこが中心になる */
+#stick{position:relative;width:100%;flex:1;min-height:230px;border-radius:18px;border:2px dashed rgba(255,255,255,.18);touch-action:none;overflow:hidden}
+#stickHint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;font-size:14px;opacity:.5;pointer-events:none;line-height:1.6}
+#stickBase{position:absolute;width:140px;height:140px;margin:-70px 0 0 -70px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.08),rgba(255,255,255,.2));border:2px solid rgba(255,255,255,.4);pointer-events:none;display:none}
+#knob{position:absolute;left:50%;top:50%;width:58px;height:58px;margin:-29px 0 0 -29px;border-radius:50%;background:#ff7a1a;box-shadow:0 4px 12px rgba(0,0,0,.4)}
 details{width:100%;font-size:14px}
 summary{opacity:.8;padding:4px 0}
 .row{display:flex;gap:10px;justify-content:space-between;align-items:center;margin:8px 0}
+#speed{font-size:30px;font-weight:900;color:#dfff4f;line-height:1}
+#speed small{font-size:13px;color:#fff;opacity:.8;font-weight:700}
+#best{font-size:12px;opacity:.75}
+#vtestInfo{font-size:12px;opacity:.75}
 </style>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
@@ -56,14 +62,21 @@ summary{opacity:.8;padding:4px 0}
       <div id="aimpad"><div id="aimdot"></div></div>
     </div>
     <div class="side">
-      <div><div class="lbl">スイングの強さ</div><div class="bar"><div id="pow"></div></div></div>
+      <div>
+        <div class="lbl">スイングの速さ</div>
+        <div id="speed">--<small> km/h</small></div>
+        <div class="bar" style="margin-top:4px"><div id="pow"></div></div>
+        <div id="best">自己ベスト --</div>
+      </div>
       <button class="sub" id="view">👁 視点切替（一人称／三人称）</button>
       <button class="sub" id="calib">↺ 傾きの基準をリセット</button>
-      <button class="sub" id="tap">タップでスイング（予備）</button>
     </div>
   </div>
 
-  <div id="stick"><div id="knob"></div></div>
+  <div id="stick">
+    <div id="stickHint">ここに親指を置いて移動<br>（置いた場所がスティックの中心になります）</div>
+    <div id="stickBase"><div id="knob"></div></div>
+  </div>
 
   <details>
     <summary>設定</summary>
@@ -87,6 +100,22 @@ summary{opacity:.8;padding:4px 0}
         </select>
       </label>
       <label><input type="checkbox" id="cue"> 振りどきの合図</label>
+    </div>
+    <div class="row">
+      <label>狙いの感度
+        <select id="aimSens">
+          <option value="low">低め</option>
+          <option value="mid" selected>ふつう</option>
+          <option value="high">高め</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button class="sub" id="vtest" style="width:auto;padding:9px 14px">振動テスト</button>
+      <span id="vtestInfo"></span>
+    </div>
+    <div class="row">
+      <button class="sub" id="tap" style="width:auto;padding:9px 14px">タップでスイング（予備）</button>
     </div>
   </details>
 </div>
@@ -150,6 +179,16 @@ function onData(d) {
 // iPhoneアプリ版（ios/）の中では本体の振動機能（Core Haptics）を使い、
 // Androidのブラウザでは Vibration API を使う。どちらも無いときは音で知らせる。
 const nativeHaptic = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.haptic;
+// 新しいアプリは window.__smaRacketHaptics = 2 を入れてくる。無ければ最初の版のアプリなので、
+// その版が分かる名前（perfect / good / weak / miss / win / lose）だけで送る。
+const nativeV2 = () => !!window.__smaRacketHaptics;
+function legacyName(kind, extra) {
+  if (kind === 'hit') return ['weak', 'good', 'perfect'][extra.q] || 'good';
+  if (kind === 'win' || kind === 'gameWin' || kind === 'matchWin') return 'win';
+  if (kind === 'lose' || kind === 'gameLose' || kind === 'matchLose') return 'lose';
+  if (kind === 'miss' || kind === 'fault' || kind === 'net') return 'miss';
+  return null;   // バウンドや合図は最初の版には無いので鳴らさない
+}
 const canVibrate = !!nativeHaptic || typeof navigator.vibrate === 'function';
 // Android 用：強弱は指定できないので、長さと細かい断続（短く刻むほど弱く感じる）で表現する
 const VIBE = {
@@ -175,7 +214,13 @@ function vibeScale() { return +$('vstr').value; }
 function haptic(kind, extra = {}) {
   const scale = vibeScale();
   if (scale <= 0) return;
-  if (nativeHaptic) { try { nativeHaptic.postMessage({ kind, scale, ...extra }); } catch (e) {} return; }
+  if (nativeHaptic) {
+    try {
+      if (nativeV2()) nativeHaptic.postMessage({ kind, scale, ...extra });
+      else { const n = legacyName(kind, extra); if (n) nativeHaptic.postMessage(n); }
+    } catch (e) {}
+    return;
+  }
   if (!navigator.vibrate) return;
   const pat = kind === 'hit' ? hitPattern(extra) : VIBE[kind];
   if (!pat) return;
@@ -200,6 +245,8 @@ function flash(color) {
 // ---------- 狙い（傾き） ----------
 // x：左右に傾ける（gamma）、y：奥に倒すと深い球／手前に倒すと浅い球（beta の基準からの差）
 let sensorsOn = false, betaNow = null, beta0 = null, calibPending = true;
+// 狙いの感度：[左右の端までの傾き, 奥行きの端までの傾き]（度）。大きいほどゆっくり動く
+const AIM_RANGE = { low: [62, 44], mid: [48, 34], high: [35, 25] };
 let aimNow = { x: 0, y: 0 }, lastAimSent = 0, lastAimVal = { x: 9, y: 9 };
 const aimHist = [];   // スイング直前の傾きを使うための履歴
 
@@ -207,9 +254,10 @@ function onOrient(e) {
   if (e.gamma == null || e.beta == null) return;
   betaNow = e.beta;
   if (calibPending) { beta0 = e.beta; calibPending = false; }
-  let x = clamp(e.gamma / 35, -1, 1);
+  const [gx, by] = AIM_RANGE[$('aimSens').value] || AIM_RANGE.mid;   // 端まで狙うのに必要な傾き（度）
+  let x = clamp(e.gamma / gx, -1, 1);
   if ($('flip').checked) x = -x;
-  const y = clamp((beta0 - e.beta) / 25, -1, 1);   // 画面の上側を奥へ倒すと beta が小さくなる → 深い
+  const y = clamp((beta0 - e.beta) / by, -1, 1);   // 画面の上側を奥へ倒すと beta が小さくなる → 深い
   aimNow = { x, y };
   const t = performance.now();
   aimHist.push({ t, a: aimNow }); while (aimHist.length && t - aimHist[0].t > 600) aimHist.shift();
@@ -227,7 +275,19 @@ function aimBefore(ms) {
 }
 
 // ---------- スイング検出 ----------
-let swingState = 0, peak = 0, riseT = 0, cool = 0;
+let swingState = 0, peak = 0, peakRot = 0, peakAcc = 0, riseT = 0, cool = 0, hasGyro = false;
+// スイングの速さ（km/h）の目安：
+//   スマホの回転の速さ（角速度）× 肩からラケットの芯までの長さ（約1.1m）＝ ラケットの芯の速さ
+//   ジャイロが無い端末では加速度から大まかに見積もる
+const ARM = 1.1;
+function swingKmh() {
+  if (hasGyro) return peakRot * Math.PI / 180 * ARM * 3.6;
+  return peakAcc * 2.2;
+}
+// 「振る強さ」の設定ごとの、打球の強さ 0〜100% に対応するスイング速度（km/h）
+const SPEED_RANGE = { '0.45': [20, 90], '0.75': [30, 120], '1.1': [40, 140] };
+let bestKmh = 0;
+try { bestKmh = +localStorage.getItem('racket.best') || 0; } catch (e) {}
 
 async function enableSensors() {
   try {
@@ -249,6 +309,7 @@ async function enableSensors() {
 
 function onMotion(e) {
   const rr = e.rotationRate || {};
+  if (rr.alpha != null) hasGyro = true;
   const rot = Math.hypot(rr.alpha || 0, rr.beta || 0, rr.gamma || 0);
   let acc = 0;
   if (e.acceleration && e.acceleration.x != null) acc = Math.hypot(e.acceleration.x, e.acceleration.y, e.acceleration.z);
@@ -257,33 +318,63 @@ function onMotion(e) {
   const th = +$('sens').value;
   const t = performance.now();
   if (swingState === 0) {
-    if (s > th && t > cool) { swingState = 1; peak = s; riseT = t; }
+    if (s > th && t > cool) { swingState = 1; peak = s; peakRot = rot; peakAcc = acc; riseT = t; }
   } else {
-    peak = Math.max(peak, s);
+    peak = Math.max(peak, s); peakRot = Math.max(peakRot, rot); peakAcc = Math.max(peakAcc, acc);
     if (s < peak * 0.8 || t - riseT > 80) {   // ピーク（＝インパクト）で送信
       swingState = 0; cool = t + 380;
-      fire(0.2 + 0.8 * clamp((peak - th) / (th * 2), 0, 1));
+      const kmh = swingKmh();
+      const [lo, hi] = SPEED_RANGE[$('sens').value] || SPEED_RANGE['0.75'];
+      fire(clamp((kmh - lo) / (hi - lo), 0, 1), kmh);   // 速く振るほど強い打球
     }
   }
 }
 
-function fire(power) {
+function fire(power, kmh) {
   const a = aimBefore(180);   // 振り始める前の傾きで狙う
-  send({ t: 'swing', p: power, a });
+  const msg = { t: 'swing', p: +power.toFixed(3), a };
+  if (kmh) {
+    msg.v = Math.round(kmh);
+    $('speed').innerHTML = msg.v + '<small> km/h</small>';
+    if (msg.v > bestKmh) {
+      bestKmh = msg.v;
+      try { localStorage.setItem('racket.best', bestKmh); } catch (e) {}
+    }
+    $('best').textContent = '自己ベスト ' + bestKmh + ' km/h';
+  }
+  send(msg);
   $('pow').style.width = (power * 100) + '%';
 }
 
 // ---------- 移動スティック ----------
-const stickEl = $('stick'), knob = $('knob');
-let stickId = null, stickVec = { x: 0, y: 0 }, stickTimer = null;
-function stickFrom(e) {
+// 親指を置いた場所を中心にする（フローティングスティック）。
+// 中心から大きく離れたら、中心が指を追いかけてくるので、持ち替えなくても操作し続けられる。
+const stickEl = $('stick'), knob = $('knob'), base = $('stickBase');
+const STICK_R = 60;   // 端まで倒したことになる距離（px）
+let stickId = null, stickVec = { x: 0, y: 0 }, stickTimer = null, origin = null;
+function placeBase() {
   const r = stickEl.getBoundingClientRect();
-  const R = r.width / 2;
-  let x = (e.clientX - (r.left + R)) / (R * 0.7);
-  let y = (e.clientY - (r.top + R)) / (R * 0.7);
+  base.style.left = (origin.x - r.left) + 'px';
+  base.style.top = (origin.y - r.top) + 'px';
+}
+function stickFrom(e) {
+  let dx = e.clientX - origin.x, dy = e.clientY - origin.y;
+  const d = Math.hypot(dx, dy);
+  if (d > STICK_R) {   // 中心を指の方へ引っぱる
+    const pull = (d - STICK_R) / d;
+    origin.x += dx * pull; origin.y += dy * pull;
+    dx -= dx * pull; dy -= dy * pull;
+    placeBase();
+  }
+  // 枠の端では中心が枠の外に出ないようにとどめる（指が枠の外へ出ても操作は続く）
+  const r = stickEl.getBoundingClientRect(), pad = 70;
+  const ox = clamp(origin.x, r.left + pad, r.right - pad), oy = clamp(origin.y, r.top + pad, r.bottom - pad);
+  if (ox !== origin.x || oy !== origin.y) { origin.x = ox; origin.y = oy; placeBase(); }
+  dx = e.clientX - origin.x; dy = e.clientY - origin.y;
+  let x = dx / STICK_R, y = dy / STICK_R;
   const m = Math.hypot(x, y);
   if (m > 1) { x /= m; y /= m; }
-  knob.style.transform = `translate(${x * R * 0.6}px, ${y * R * 0.6}px)`;
+  knob.style.transform = `translate(${x * STICK_R}px, ${y * STICK_R}px)`;
   const dead = 0.12;   // 親指を置いただけでは動かないように
   const mm = Math.hypot(x, y);
   const k = mm < dead ? 0 : (mm - dead) / (1 - dead) / mm;
@@ -293,6 +384,8 @@ function sendStick() { send({ t: 'stick', x: +stickVec.x.toFixed(2), y: +stickVe
 stickEl.addEventListener('pointerdown', e => {
   if (stickId !== null) return;
   stickId = e.pointerId; stickEl.setPointerCapture(e.pointerId);
+  origin = { x: e.clientX, y: e.clientY };
+  placeBase(); base.style.display = 'block'; $('stickHint').style.display = 'none';
   stickFrom(e); sendStick();
   clearInterval(stickTimer); stickTimer = setInterval(sendStick, 50);   // 押している間は送り続ける
   e.preventDefault();
@@ -302,6 +395,7 @@ function stickEnd(e) {
   if (e.pointerId !== stickId) return;
   stickId = null; clearInterval(stickTimer);
   stickVec = { x: 0, y: 0 }; knob.style.transform = '';
+  base.style.display = 'none';
   sendStick(); setTimeout(sendStick, 60);   // 止まる合図は念のため2回
 }
 stickEl.addEventListener('pointerup', stickEnd);
@@ -327,11 +421,17 @@ $('go').onclick = async () => {
   send({ t: 'start' });
 };
 $('tap').onclick = () => fire(0.6);
+$('vtest').onclick = () => {
+  haptic('hit', { q: 2, p: 0.9, o: 0 });
+  $('vtestInfo').textContent =
+    nativeHaptic ? (nativeV2() ? 'iPhoneアプリ（最新）で振動' : 'iPhoneアプリ（古い版）で振動。Xcodeで入れ直すと細かい振動になります')
+    : navigator.vibrate ? 'Androidの振動で再生' : 'このブラウザは振動できません（iPhoneはアプリ版を使ってください）';
+};
 $('view').onclick = () => send({ t: 'view' });
 $('calib').onclick = () => { calibPending = true; $('info').textContent = '今の持ち方を「まっすぐ」にしました'; };
 
 // 設定を覚えておく（使えない環境でも動くように try で囲む）
-for (const id of ['sens', 'flip', 'vstr', 'cue']) {
+for (const id of ['sens', 'flip', 'vstr', 'cue', 'aimSens']) {
   const el = $(id), key = 'racket.' + id;
   try {
     const v = localStorage.getItem(key);
@@ -342,6 +442,7 @@ for (const id of ['sens', 'flip', 'vstr', 'cue']) {
     if (id === 'vstr') haptic('hit', { q: 2, p: 0.8, o: 0 });   // 強さを変えたらその場で確かめられる
   });
 }
+if (bestKmh) $('best').textContent = '自己ベスト ' + bestKmh + ' km/h';
 </script>
 </body>
 </html>

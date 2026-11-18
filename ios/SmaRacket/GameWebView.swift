@@ -14,6 +14,9 @@ struct GameWebView: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.userContentController.add(WeakScriptHandler(context.coordinator), name: "haptic")
+        // ページに「細かい振動に対応した版のアプリ」だと知らせる（古い版のアプリには無い）
+        config.userContentController.addUserScript(
+            WKUserScript(source: "window.__smaRacketHaptics = 2;", injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.uiDelegate = context.coordinator

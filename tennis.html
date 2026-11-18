@@ -23,6 +23,8 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
 #aimpad::after{content:"";position:absolute;left:-2px;right:-2px;bottom:-2px;height:4px;background:#fff}
 #aimdot{position:absolute;top:50%;left:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:#dfff4f;box-shadow:0 0 8px #dfff4f}
 #aimlabel{position:absolute;left:50%;bottom:110px;transform:translateX(-50%);font-size:12px;opacity:.8}
+#speedBox{position:absolute;left:14px;top:14px;background:rgba(0,0,0,.55);padding:8px 12px;border-radius:8px;font-size:13px;line-height:1.5;opacity:0;transition:opacity .3s}
+#speedBox b{font-size:22px;color:#dfff4f}
 #viewBtn{position:absolute;right:14px;top:14px;pointer-events:auto;font-size:14px;padding:8px 12px;background:rgba(0,0,0,.55);border-radius:8px}
 .overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(5,15,10,.82);text-align:center;padding:16px;overflow:auto}
 .overlay h1{margin:0;font-size:40px}
@@ -58,6 +60,7 @@ button:hover{filter:brightness(1.1)}
   <div id="sub"></div>
   <div id="aimlabel">狙い</div>
   <div id="aimpad"><div id="aimdot"></div></div>
+  <div id="speedBox">スイング <b id="swingKmh">--</b> km/h<br>打球 <b id="ballKmh">--</b> km/h</div>
   <button id="viewBtn">👁 一人称にする（V）</button>
   <div id="conn">📱 スマホ未接続（キーボードで遊べます）</div>
   <div id="help">移動：スマホのスティック / ←↑↓→<br>スイング：スマホを振る / Space / クリック<br>狙い：スマホを傾ける（左右＋奥・手前）/ W A S D<br>視点の切り替え：V</div>
@@ -483,8 +486,9 @@ function hitBall(who, tx, tz, speed, { clear = 0.2, intoNet = false } = {}) {
 }
 
 // ---------- プレイヤーのスイング ----------
-function playerSwing(power, aimVal) {
+function playerSwing(power, aimVal, kmh) {
   if (S.mode !== 'play') return;
+  lastSwingKmh = kmh || null;
   P.swing = 0; sfx('whoosh');
   if (S.phase === 'pserve') {
     if (ball.p.y > 1.8) serveHit(power, aimVal);
@@ -498,6 +502,13 @@ function playerSwing(power, aimVal) {
   if (tArr > 0.45) { showSub('早すぎ！', '#ffcf5a'); send({ t: 'miss' }); return; }
   if (tArr < -0.22) { showSub('遅すぎ！', '#ffcf5a'); send({ t: 'miss' }); return; }
   P.pending = { power, aim: { ...aimVal }, err: -tArr, until: now + Math.max(tArr, 0) + 0.1 };
+}
+// スイング速度と打球速度の表示
+let lastSwingKmh = null, speedBoxT = 0;
+function showSpeeds() {
+  $('swingKmh').textContent = lastSwingKmh ? Math.round(lastSwingKmh) : '--';
+  $('ballKmh').textContent = Math.round(ball.v.length() * 3.6);
+  $('speedBox').style.opacity = 1; speedBoxT = 3;
 }
 function checkPending() {
   const pd = P.pending; if (!pd) return;
@@ -517,6 +528,7 @@ function checkPending() {
   const tz = -(aimDepth(ay) + (pd.power - 0.5) * 1.2) + randn() * noise * 1.2;   // 強く振るほど少し伸びる
   const spd = (8 + 15 * pd.power) * (0.6 + 0.4 * (ay + 1) / 2) + (q === 2 ? 3 : 0); // 浅い球ほどゆっくり
   hitBall(0, tx, tz, spd);
+  showSpeeds();
   zoneRing.material.color.set(0x55ff77); zoneRing.material.opacity = 0.9;
   showSub(['ミスヒット…', 'ナイスショット！', 'パーフェクト！！'][q], ['#ffb3b3', '#ffffff', '#ffe14d'][q], 0.9);
   send({ t: 'hit', q, p: pd.power, o: off });
@@ -528,6 +540,7 @@ function serveHit(power, aimVal) {
   const q = off < 0.15 ? 2 : 1;
   hitBall(0, tx, tz, 13 + 13 * power + (q === 2 ? 2 : 0), { clear: 0.12 });
   ball.serve = true;
+  showSpeeds();
   send({ t: 'hit', q, p: power, o: off });
 }
 
@@ -711,6 +724,7 @@ function frame(t) {
   camera.position.copy(camPos); camera.lookAt(camLook);
 
   if (msgTimer > 0 && (msgTimer -= dt) <= 0) $('msg').style.opacity = 0;
+  if (speedBoxT > 0 && (speedBoxT -= dt) <= 0) $('speedBox').style.opacity = 0;
   if (subTimer > 0 && (subTimer -= dt) <= 0) $('sub').style.opacity = 0;
 
   renderer.render(scene, camera);
@@ -774,7 +788,7 @@ function onPhone(d) {
   if (d.t === 'aim') phoneAim = toAim(d);
   else if (d.t === 'tilt') phoneAim = toAim(d.a);
   else if (d.t === 'stick') { phoneStick = { x: clamp(+d.x || 0, -1, 1), y: clamp(+d.y || 0, -1, 1) }; phoneStickT = now; }
-  else if (d.t === 'swing') { if (d.a !== undefined) phoneAim = toAim(d.a); playerSwing(clamp(+d.p || 0.5, 0, 1), aim()); }
+  else if (d.t === 'swing') { if (d.a !== undefined) phoneAim = toAim(d.a); playerSwing(clamp(+d.p || 0.5, 0, 1), aim(), +d.v || null); }
   else if (d.t === 'view') toggleView();
   else if (d.t === 'start' && S.mode !== 'play') startMatch();
 }
