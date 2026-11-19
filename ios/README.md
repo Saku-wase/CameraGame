@@ -45,6 +45,10 @@
 ホーム画面の「振動の見本」で振動を確かめられます。
 打球音はiPhoneがマナーモードでも鳴ります（2026年11月19日以降のコードでビルドしたアプリ）。振動しないときは「設定」→「サウンドと触覚」→「システムの触覚」がオンか確認してください。
 
+## アプリアイコン
+ネオンのラケットと振動の波紋（`SmaRacket/Assets.xcassets/AppIcon.appiconset/AppIcon.png`、1024×1024）。
+元のデザインは `icon/AppIcon.svg` にあります。
+
 ## ファイル
 - `SmaRacket/ContentView.swift` … ホーム画面・ゲーム画面
 - `SmaRacket/GameWebView.swift` … racket.html を表示し、ページからの振動の合図を受け取る
