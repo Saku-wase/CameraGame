@@ -26,6 +26,8 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
 #speedBox{position:absolute;left:14px;top:14px;background:rgba(0,0,0,.55);padding:8px 12px;border-radius:8px;font-size:13px;line-height:1.5;opacity:0;transition:opacity .3s}
 #speedBox b{font-size:22px;color:#dfff4f}
 #viewBtn{position:absolute;right:14px;top:14px;pointer-events:auto;font-size:14px;padding:8px 12px;background:rgba(0,0,0,.55);border-radius:8px}
+#muteBtn{position:absolute;right:14px;top:58px;pointer-events:auto;font-size:14px;padding:8px 12px;background:rgba(0,0,0,.55);border-radius:8px}
+.checks{display:flex;gap:18px;font-size:16px}
 .overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(5,15,10,.82);text-align:center;padding:16px;overflow:auto}
 .overlay h1{margin:0;font-size:40px}
 .row{display:flex;gap:28px;align-items:center;justify-content:center;flex-wrap:wrap}
@@ -62,6 +64,7 @@ button:hover{filter:brightness(1.1)}
   <div id="aimpad"><div id="aimdot"></div></div>
   <div id="speedBox">スイング <b id="swingKmh">--</b> km/h<br>打球 <b id="ballKmh">--</b> km/h</div>
   <button id="viewBtn">👁 一人称にする（V）</button>
+  <button id="muteBtn">🔊 消音（M）</button>
   <div id="conn">📱 スマホ未接続（キーボードで遊べます）</div>
   <div id="help">移動：スマホのスティック / ←↑↓→<br>スイング：スマホを振る / Space / クリック<br>狙い：スマホを傾ける（左右＋奥・手前）/ W A S D<br>視点の切り替え：V</div>
 </div>
@@ -101,6 +104,12 @@ button:hover{filter:brightness(1.1)}
     <label>視点
       <select id="view"><option value="third" selected>三人称</option><option value="first">一人称</option></select>
     </label>
+  </div>
+  <div class="checks">
+    <span>🔈 PCの音：</span>
+    <label><input type="checkbox" id="sBgm"> BGM</label>
+    <label><input type="checkbox" id="sAmb"> 観客・環境音</label>
+    <label><input type="checkbox" id="sCall"> 審判コール（英語）</label>
   </div>
   <button id="start">スタート</button>
   <div id="fileWarn" class="warn hidden">このページはファイルとして直接開かれているので、スマホからはつながりません。GitHub Pages などの https のURLで開いてください。</div>
@@ -261,28 +270,229 @@ const P = { x: 0, z: PZ, vx: 0, vz: 0, ...makePlayer(0xe53935), pending: null };
 const C = { x: 0, z: -PZ, ...makePlayer(0x1e88e5), plan: null, planT: 0, done: false };
 C.g.rotation.y = Math.PI;
 
-// ---------- 効果音 ----------
-let actx = null;
-function sfx(kind, vol = 1) {
+// ---------- サウンド（PC：BGM・環境音・コートの音） ----------
+// スマホがつながっているときは、自分の打球音と素振りの音はスマホから鳴らす。
+// PCは「会場の音」担当：BGM、観客、風や鳥、ボールのバウンド、相手（CPU）の打球音、審判コール。
+// 音はすべてその場でプログラムで作っている（音声ファイルは使わない）。
+let actx = null, master, busBgm, busAmb, busSfx, noiseBuf, murmurGain, bgmDuck;
+const snd = { bgm: true, amb: true, call: true, muted: false };
+try { Object.assign(snd, JSON.parse(localStorage.getItem('tennis.sound') || '{}')); } catch (e) {}
+const phoneOn = () => !!(conn && conn.open);
+
+function audioInit() {
+  if (actx) { actx.resume?.(); return; }
+  try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  master = actx.createGain(); master.connect(actx.destination);
+  const bus = () => { const g = actx.createGain(); g.connect(master); return g; };
+  busBgm = bus(); busAmb = bus(); busSfx = bus();
+  bgmDuck = actx.createGain(); bgmDuck.connect(busBgm);
+  noiseBuf = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate);   // いろいろな音の素材になるノイズ
+  const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  applySoundSettings(true);
+  startAmbience(); startBgm();
+}
+function applySoundSettings(now) {
+  try { localStorage.setItem('tennis.sound', JSON.stringify(snd)); } catch (e) {}
+  $('muteBtn').textContent = snd.muted ? '🔇 音を出す（M）' : '🔊 消音（M）';
   if (!actx) return;
-  const t = actx.currentTime;
-  const len = kind === 'hit' ? 0.09 : kind === 'bounce' ? 0.06 : 0.15;
-  const buf = actx.createBuffer(1, actx.sampleRate * len, actx.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, kind === 'whoosh' ? 1 : 4);
-  const src = actx.createBufferSource(); src.buffer = buf;
-  const f = actx.createBiquadFilter(); f.type = 'bandpass';
-  f.frequency.value = kind === 'hit' ? 1400 : kind === 'bounce' ? 380 : kind === 'net' ? 200 : 900;
-  f.Q.value = kind === 'whoosh' ? 0.7 : 1.5;
-  const gn = actx.createGain(); gn.gain.value = (kind === 'whoosh' ? 0.25 : 0.9) * vol;
-  src.connect(f).connect(gn).connect(actx.destination); src.start(t);
-  if (kind === 'point' || kind === 'lose') {
-    const o = actx.createOscillator(), og = actx.createGain();
-    o.frequency.setValueAtTime(kind === 'point' ? 660 : 330, t);
-    o.frequency.setValueAtTime(kind === 'point' ? 990 : 247, t + 0.12);
-    og.gain.setValueAtTime(0.15, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
-    o.connect(og).connect(actx.destination); o.start(t); o.stop(t + 0.35);
+  const t = actx.currentTime, set = (g, v) => now ? g.gain.setValueAtTime(v, t) : g.gain.setTargetAtTime(v, t, 0.08);
+  set(master, snd.muted ? 0 : 0.9);
+  set(busBgm, snd.bgm ? 0.45 : 0);
+  set(busAmb, snd.amb ? 1 : 0);
+}
+
+// 小さな道具
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+function noiseSrc(loop = false) { const n = actx.createBufferSource(); n.buffer = noiseBuf; n.loop = loop; n.loopStart = Math.random(); return n; }
+function filt(type, freq, q = 1) { const f = actx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q; return f; }
+function envGain(t, peak, attack, decay) {   // 立ち上がって消える音量
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+  return g;
+}
+function osc(type, freq, t, dur) { const o = actx.createOscillator(); o.type = type; o.frequency.value = freq; o.start(t); o.stop(t + dur + 0.05); return o; }
+function chain(...nodes) { for (let i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]); return nodes[0]; }
+// コート上の位置から、左右の聞こえ方と距離による音量を決める
+function place(x, z) {
+  const pan = actx.createStereoPanner ? actx.createStereoPanner() : actx.createGain();
+  if (pan.pan) pan.pan.value = clamp((x - P.x) / 7, -1, 1);
+  const g = actx.createGain(); g.gain.value = 1 / (1 + Math.hypot(x - P.x, z - P.z) / 9);
+  pan.connect(g).connect(busSfx);
+  return pan;
+}
+
+// ---- BGM：軽快なループ（4小節：Cmaj7 → Am7 → Fmaj7 → G7） ----
+const BPM = 100, STEP = 60 / BPM / 4;
+const CHORDS = [[60, 64, 67, 71], [57, 60, 64, 67], [53, 57, 60, 64], [55, 59, 62, 65]];
+const ROOTS = [36, 33, 29, 31];
+let bgmStep = 0, bgmNext = 0;
+function startBgm() {
+  bgmNext = actx.currentTime + 0.2;
+  setInterval(() => {
+    if (!actx || actx.state !== 'running') return;
+    if (bgmNext < actx.currentTime) bgmNext = actx.currentTime + 0.05;
+    while (bgmNext < actx.currentTime + 0.15) { bgmPlay(bgmStep, bgmNext); bgmNext += STEP; bgmStep = (bgmStep + 1) % 64; }
+  }, 25);
+}
+function bgmPlay(i, t) {
+  if (!snd.bgm) return;
+  const bar = Math.floor(i / 16), st = i % 16, ch = CHORDS[bar];
+  if (st === 0) ch.forEach(m => {   // パッド：やわらかい和音
+    const g = actx.createGain(), dur = STEP * 16;
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.03, t + 0.35);
+    g.gain.setValueAtTime(0.03, t + dur - 0.3); g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    const lp = filt('lowpass', 1400, 0.5);
+    chain(osc('triangle', mtof(m), t, dur), lp); chain(osc('triangle', mtof(m) * 1.004, t, dur), lp);
+    lp.connect(g).connect(bgmDuck);
+  });
+  if (st === 0 || st === 7 || st === 10)   // ベース
+    chain(osc('sine', mtof(ROOTS[bar] + (st === 10 ? 12 : 0)), t, 0.4), envGain(t, 0.2, 0.01, 0.35), bgmDuck);
+  if (st % 2 === 0)   // きらきらした分散和音
+    chain(osc('sine', mtof(ch[(st / 2) % 4] + 12), t, 0.3), envGain(t, st % 4 === 0 ? 0.05 : 0.03, 0.005, 0.25), bgmDuck);
+  if (st === 0 || st === 8) {   // キック
+    const o = osc('sine', 110, t, 0.2); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    chain(o, envGain(t, 0.3, 0.005, 0.18), bgmDuck);
   }
+  if (st === 4 || st === 12) chain(noiseSrc(), filt('bandpass', 1800, 0.8), envGain(t, 0.07, 0.003, 0.12), bgmDuck);   // スナップ
+  if (st % 4 === 2) chain(noiseSrc(), filt('highpass', 8000), envGain(t, 0.045, 0.002, 0.04), bgmDuck);           // ハイハット
+}
+
+// ---- 環境音：観客のざわめき・風・鳥 ----
+function startAmbience() {
+  murmurGain = actx.createGain(); murmurGain.gain.value = 0.07;
+  const n = noiseSrc(true); n.playbackRate.value = 0.8;
+  chain(n, filt('bandpass', 520, 0.7), filt('lowpass', 1300), murmurGain, busAmb); n.start();
+  const lfo = osc('sine', 0.23, actx.currentTime, 1e6), lfoG = actx.createGain(); lfoG.gain.value = 0.02;
+  lfo.connect(lfoG).connect(murmurGain.gain);   // ざわめきをゆっくり揺らす
+  const w = noiseSrc(true); w.playbackRate.value = 0.5;
+  const wg = actx.createGain(); wg.gain.value = 0.05;
+  chain(w, filt('lowpass', 260), wg, busAmb); w.start();
+  (function birdLoop() { setTimeout(() => { bird(); birdLoop(); }, 7000 + Math.random() * 12000); })();
+}
+function bird() {
+  if (!actx || !snd.amb || actx.state !== 'running') return;
+  const t0 = actx.currentTime, n = 2 + Math.floor(Math.random() * 3), base = 3000 + Math.random() * 800;
+  const pan = actx.createStereoPanner ? actx.createStereoPanner() : actx.createGain();
+  if (pan.pan) pan.pan.value = Math.random() * 1.6 - 0.8;
+  pan.connect(busAmb);
+  for (let i = 0; i < n; i++) {
+    const t = t0 + i * 0.13, o = osc('sine', base, t, 0.08);
+    o.frequency.exponentialRampToValueAtTime(base * 1.35, t + 0.06);
+    chain(o, envGain(t, 0.012, 0.01, 0.06), pan);
+  }
+}
+let murmurLevel = 0, duckLevel = 0;
+function updateAmbience() {   // ラリー中は観客が静かになり、BGMも少し下がる
+  if (!actx) return;
+  const playing = S.mode === 'play' && ['rally', 'pserve', 'ctoss'].includes(S.phase);
+  const m = playing ? 0.025 : 0.07, d = playing ? 0.55 : 1;
+  if (m !== murmurLevel) { murmurLevel = m; murmurGain.gain.setTargetAtTime(m, actx.currentTime, 0.5); }
+  if (d !== duckLevel) { duckLevel = d; bgmDuck.gain.setTargetAtTime(d, actx.currentTime, 0.4); }
+}
+
+// ---- 観客の反応 ----
+function applause(strength = 1, dur = 2.2, delay = 0) {
+  if (!actx) return;
+  const sr = actx.sampleRate, len = Math.floor(sr * dur), buf = actx.createBuffer(2, len, sr);
+  for (let ch = 0; ch < 2; ch++) {   // たくさんの拍手の粒を、最初は多く・だんだん少なく並べる
+    const d = buf.getChannelData(ch), claps = Math.floor(150 * strength * dur), cl = Math.floor(sr * 0.012);
+    for (let k = 0; k < claps; k++) {
+      const st = Math.floor(Math.pow(Math.random(), 1.7) * (len - cl)), amp = 0.3 + 0.7 * Math.random();
+      for (let j = 0; j < cl; j++) d[st + j] += (Math.random() * 2 - 1) * amp * Math.exp(-j / (sr * 0.003));
+    }
+  }
+  const src = actx.createBufferSource(); src.buffer = buf;
+  const t = actx.currentTime + delay, g = actx.createGain();
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18 * strength, t + 0.08);
+  g.gain.setValueAtTime(0.18 * strength, t + dur * 0.4); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  chain(src, filt('bandpass', 1500, 0.5), g, busAmb); src.start(t);
+}
+function cheer(delay = 0) {   // 「ワーッ」という歓声＋指笛
+  const t = actx.currentTime + delay;
+  for (const f of [800, 1700]) {
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.09, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+    const n = noiseSrc(); chain(n, filt('bandpass', f, 1.2), g, busAmb); n.start(t); n.stop(t + 2.3);
+  }
+  for (const dt of [0.4, 0.75]) {
+    const o = osc('sine', 2300, t + dt, 0.3); o.frequency.linearRampToValueAtTime(2900, t + dt + 0.15);
+    chain(o, envGain(t + dt, 0.03, 0.03, 0.25), busAmb);
+  }
+}
+function groan() {   // 「あぁ…」という残念そうな声
+  const t = actx.currentTime;
+  [[700, 380], [1150, 750]].forEach(([f0, f1]) => {
+    const bp = filt('bandpass', f0, 4); bp.frequency.exponentialRampToValueAtTime(f1, t + 1.0);
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.12, t + 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+    const n = noiseSrc(); chain(n, bp, g, busAmb); n.start(t); n.stop(t + 1.3);
+  });
+}
+function crowdReact(w, gameWon) {
+  if (!actx) return;
+  if (w === 0) {
+    if (S.over) { applause(2.2, 4.5); cheer(); cheer(1.2); }
+    else if (gameWon) { applause(1.6, 3.2); cheer(); }
+    else applause(1, 2.2);
+  } else {
+    groan();
+    applause(gameWon ? 0.6 : 0.35, 1.6, 0.5);   // 相手にもおつきあいの拍手
+  }
+}
+
+// ---- コートの音 ----
+function sndBounce(p, imp) {
+  if (!actx) return;
+  const t = actx.currentTime, v = Math.min(1, imp / 8), out = place(p.x, p.z);
+  const o = osc('sine', 170, t, 0.08); o.frequency.exponentialRampToValueAtTime(110, t + 0.05);
+  chain(o, envGain(t, 0.35 * v, 0.002, 0.06), out);
+  chain(noiseSrc(), filt('bandpass', 1200, 1.5), envGain(t, 0.25 * v, 0.001, 0.025), out);
+}
+function sndNet(p) {
+  if (!actx) return;
+  const t = actx.currentTime, out = place(p.x, p.z);
+  chain(noiseSrc(), filt('lowpass', 450), envGain(t, 0.45, 0.003, 0.16), out);
+  chain(osc('sine', 90, t, 0.15), envGain(t, 0.3, 0.003, 0.12), out);
+}
+// ラケットの打球音（CPUの球、またはスマホがつながっていない時の自分の球）
+function sndRacket(p, speed) {
+  if (!actx) return;
+  const t = actx.currentTime, out = place(p.x, p.z), v = 0.5 + Math.min(0.5, speed / 50);
+  const f0 = 950 + speed * 12;
+  const body = osc('triangle', f0, t, 0.1); body.frequency.exponentialRampToValueAtTime(f0 * 0.6, t + 0.04);
+  chain(body, envGain(t, 0.5 * v, 0.001, 0.08), out);
+  chain(noiseSrc(), filt('bandpass', 2600, 2), envGain(t, 0.45 * v, 0.001, 0.015), out);
+  chain(osc('sine', 2300, t, 0.12), envGain(t, 0.06 * v, 0.002, 0.1), out);
+}
+function sndWhoosh() {
+  if (!actx) return;
+  const t = actx.currentTime, bp = filt('bandpass', 500, 0.8);
+  bp.frequency.exponentialRampToValueAtTime(2000, t + 0.18);
+  const n = noiseSrc(); chain(n, bp, envGain(t, 0.15, 0.06, 0.14), busSfx); n.start(t); n.stop(t + 0.25);
+}
+
+// ---- 審判コール（ブラウザの読み上げ機能。英語） ----
+function umpire(text) {
+  if (!snd.call || snd.muted || !('speechSynthesis' in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const voices = speechSynthesis.getVoices();
+    const v = voices.find(v => /^en[-_]GB/i.test(v.lang)) || voices.find(v => /^en/i.test(v.lang));
+    if (v) u.voice = v;
+    u.lang = v ? v.lang : 'en-GB'; u.rate = 0.95; u.pitch = 0.9; u.volume = 0.9;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+function scoreCall(w, gameWon) {
+  const who = i => i === 0 ? 'Player' : 'Computer';
+  if (gameWon) return S.over ? `Game, set and match, ${who(w)}` : `Game, ${who(w)}`;
+  const a = S.pts[S.server], b = S.pts[1 - S.server], N = ['Love', 'Fifteen', 'Thirty', 'Forty'];   // サーバー側から読む
+  if (a >= 3 && b >= 3) return a === b ? 'Deuce' : `Advantage, ${who(S.pts[0] > S.pts[1] ? 0 : 1)}`;
+  if (a === b) return `${N[a]} all`;
+  return `${N[a]}, ${N[b]}`;
 }
 
 // ---------- 表示 ----------
@@ -322,8 +532,7 @@ function startMatch() {
   S.pts = [0, 0]; S.games = [0, 0]; S.server = 0; S.over = false; S.faults = 0;
   S.mode = 'play';
   $('menu').classList.add('hidden'); $('result').classList.add('hidden');
-  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
-  actx?.resume?.();
+  audioInit();
   setupServe();
   send({ t: 'state', mode: 'play' });
 }
@@ -362,7 +571,9 @@ function awardPoint(w, reason) {
     gameWon = true; S.games[w]++; S.pts = [0, 0]; S.server ^= 1;
     if (S.games[w] >= S.target) { S.over = true; S.timer = 2.5; }
   }
-  sfx(w === 0 ? 'point' : 'lose');
+  crowdReact(w, gameWon);
+  const prefix = reason.includes('ダブルフォルト') ? 'Double fault. ' : reason.includes('アウト') ? 'Out. ' : '';
+  setTimeout(() => umpire(prefix + scoreCall(w, gameWon)), 350);
   if (w === 0) showMsg(gameWon ? (S.over ? 'マッチポイント獲得！' : 'ゲーム獲得！') : 'ポイント！', '#ffe14d', 1.8);
   else showMsg(gameWon ? (S.over ? 'CPUの勝ち…' : 'CPUがゲーム獲得') : 'CPUのポイント', '#9fd0ff', 1.8);
   showSub(reason, '#fff', 1.8);
@@ -374,6 +585,7 @@ function fault(reason) {
   ball.live = false; S.faults = 1; S.phase = 'point'; S.timer = 1.4;
   showMsg('フォルト', '#ffcf5a', 1.2); showSub(reason, '#fff', 1.2);
   send({ t: 'info', ev: 'fault', text: 'フォルト（' + reason + '）' });
+  umpire('Fault');
 }
 function nextPoint() {
   if (S.over) { endMatch(); return; }
@@ -400,7 +612,7 @@ function physics(dt) {
   if (ball.live && Math.sign(pz) !== Math.sign(p.z) && pz !== 0 && Math.abs(p.x) < HW + 0.9 && p.y < NET_H + R * 0.5) {
     p.z = Math.sign(pz) * R * 1.2;
     v.z *= -0.15; v.x *= 0.3; v.y = Math.min(v.y, 0) * 0.3;
-    ball.netted = true; sfx('net');
+    ball.netted = true; sndNet(p);
     if (ball.hitter === 0) send({ t: 'fx', kind: 'net' });
     showSub('ネット！', '#ffcf5a');
   }
@@ -414,7 +626,7 @@ function physics(dt) {
   }
 }
 function onBounce(imp) {
-  sfx('bounce', Math.min(1, imp / 8));
+  sndBounce(ball.p, imp);
   if (!ball.live) return;
   const p = ball.p;
   bounceMark.position.set(p.x, 0.012, p.z); bounceMark.material.opacity = 0.9; bounceMark.scale.setScalar(1);
@@ -482,14 +694,15 @@ function hitBall(who, tx, tz, speed, { clear = 0.2, intoNet = false } = {}) {
   S.phase = 'rally'; S.rallyT = 0;
   C.done = false; C.plan = null; C.planT = 0;
   ball.cued = false;
-  sfx('hit', 0.6 + speed / 40);
+  if (who === 1 || !phoneOn()) sndRacket(p, speed);   // 自分の打球音はスマホが鳴らす
 }
 
 // ---------- プレイヤーのスイング ----------
 function playerSwing(power, aimVal, kmh) {
   if (S.mode !== 'play') return;
   lastSwingKmh = kmh || null;
-  P.swing = 0; sfx('whoosh');
+  P.swing = 0;
+  if (!phoneOn()) sndWhoosh();   // スマホがある時は、素振りの音もスマホから
   if (S.phase === 'pserve') {
     if (ball.p.y > 1.8) serveHit(power, aimVal);
     else { showSub('ボールが高い時に振ろう', '#ffcf5a'); send({ t: 'miss' }); }
@@ -723,6 +936,7 @@ function frame(t) {
   }
   camera.position.copy(camPos); camera.lookAt(camLook);
 
+  updateAmbience();
   if (msgTimer > 0 && (msgTimer -= dt) <= 0) $('msg').style.opacity = 0;
   if (speedBoxT > 0 && (speedBoxT -= dt) <= 0) $('speedBox').style.opacity = 0;
   if (subTimer > 0 && (subTimer -= dt) <= 0) $('sub').style.opacity = 0;
@@ -738,6 +952,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) playerSwing(e.shiftKey ? 1 : 0.7, aim()); }
   if (e.code === 'Enter' && S.mode !== 'play') startMatch();
   if (e.code === 'KeyV' && !e.repeat) toggleView();
+  if (e.code === 'KeyM' && !e.repeat) { snd.muted = !snd.muted; applySoundSettings(); }
   if (e.code.startsWith('Arrow')) e.preventDefault();
   updateKeys();
 });
@@ -750,6 +965,17 @@ function updateKeys() {
   keyAim.x = k('KeyD') - k('KeyA');
   keyAim.y = k('KeyW') - k('KeyS');
 }
+
+// ---------- 音の設定 ----------
+// ブラウザは、画面を一度クリックするまで音を出せない決まりなので、最初の操作で音を準備する
+addEventListener('pointerdown', audioInit);
+addEventListener('keydown', audioInit);
+for (const [id, key] of [['sBgm', 'bgm'], ['sAmb', 'amb'], ['sCall', 'call']]) {
+  $(id).checked = snd[key];
+  $(id).addEventListener('change', () => { snd[key] = $(id).checked; applySoundSettings(); });
+}
+$('muteBtn').addEventListener('click', e => { e.stopPropagation(); snd.muted = !snd.muted; applySoundSettings(); $('muteBtn').blur(); });
+applySoundSettings();
 
 // ---------- 視点の切り替え ----------
 let firstPerson = false;

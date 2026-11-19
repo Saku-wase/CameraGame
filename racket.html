@@ -102,6 +102,16 @@ summary{opacity:.8;padding:4px 0}
       <label><input type="checkbox" id="cue"> 振りどきの合図</label>
     </div>
     <div class="row">
+      <label>打球音
+        <select id="svol">
+          <option value="1" selected>大</option>
+          <option value="0.6">中</option>
+          <option value="0.3">小</option>
+          <option value="0">なし</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
       <label>狙いの感度
         <select id="aimSens">
           <option value="low">低め</option>
@@ -111,7 +121,7 @@ summary{opacity:.8;padding:4px 0}
       </label>
     </div>
     <div class="row">
-      <button class="sub" id="vtest" style="width:auto;padding:9px 14px">振動テスト</button>
+      <button class="sub" id="vtest" style="width:auto;padding:9px 14px">振動・打球音テスト</button>
       <span id="vtestInfo"></span>
     </div>
     <div class="row">
@@ -157,7 +167,7 @@ function onData(d) {
   if (!d) return;
   if (d.t === 'hit') {
     haptic('hit', { q: d.q ?? 1, p: d.p ?? 0.6, o: d.o ?? 0.3 });
-    if (!canVibrate) beep(d.q === 2 ? 1300 : 900);
+    racketSound(d.q ?? 1, d.p ?? 0.6, d.o ?? 0.3);
     flash(d.q === 2 ? '#7a5a00' : '#1e6b35');
     $('info').textContent = ['ミスヒット…', 'ナイスショット！', 'パーフェクト！！'][d.q] || 'ヒット！';
   } else if (d.t === 'miss') {
@@ -228,13 +238,58 @@ function haptic(kind, extra = {}) {
   navigator.vibrate(pat.map((ms, i) => Math.round(i % 2 ? ms : Math.max(4, ms * scale))));
 }
 
-// ---------- 音・画面演出 ----------
-let actx = null;
-function beep(freq) {
-  if (!actx) return;
-  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
-  o.frequency.value = freq; g.gain.setValueAtTime(0.2, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.13);
+// ---------- 手元の音（打球音・素振りの音） ----------
+// PCは会場の音（BGM・観客・バウンド・相手の打球）、スマホは自分のラケットの音を担当する
+let actx = null, noiseBuf = null, sndOut = null;
+function audioInit() {
+  // iPhoneのマナーモード中でも鳴らせるようにする（対応しているブラウザ・アプリのみ）
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  if (!actx) {
+    try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+    sndOut = actx.createGain(); sndOut.connect(actx.destination);
+    noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  actx.resume?.();
+}
+const vol = () => +$('svol').value;
+function envG(t, peak, attack, decay) {
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+  return g;
+}
+function tone(type, f, t, dur) { const o = actx.createOscillator(); o.type = type; o.frequency.value = f; o.start(t); o.stop(t + dur + 0.05); return o; }
+function noise(t, dur) { const n = actx.createBufferSource(); n.buffer = noiseBuf; n.start(t, Math.random() * 0.5); n.stop(t + dur + 0.05); return n; }
+function bq(type, f, q = 1) { const b = actx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; return b; }
+function to(out, ...nodes) { nodes.reduce((a, b) => (a.connect(b), b)).connect(out); }
+
+// 打球音：芯に当たるほど高く澄んだ「パコーン」、外れるほど鈍い「ボコッ」＋フレームの「カン」
+function racketSound(q, p, o) {
+  if (!actx || vol() <= 0) return;
+  const t = actx.currentTime, v = vol() * (0.55 + 0.45 * p);
+  if (q >= 1) {
+    const f0 = (q === 2 ? 1250 : 1050) + 300 * p - 250 * o;   // 球の芯の「パコッ」
+    const body = tone('triangle', f0, t, 0.12); body.frequency.exponentialRampToValueAtTime(f0 * 0.55, t + 0.045);
+    to(sndOut, body, envG(t, 0.6 * v, 0.001, q === 2 ? 0.07 : 0.09));
+    to(sndOut, noise(t, 0.03), bq('bandpass', q === 2 ? 3200 : 2500, q === 2 ? 3 : 1.5), envG(t, 0.55 * v, 0.0008, 0.014));   // 乾いたアタック
+    const ping = q === 2 ? 2900 : 2300;   // ガットの響き
+    to(sndOut, tone('sine', ping, t, 0.25), envG(t, (q === 2 ? 0.12 : 0.07) * v, 0.002, q === 2 ? 0.2 : 0.11));
+    if (q === 2) to(sndOut, tone('sine', ping * 1.5, t, 0.2), envG(t, 0.05 * v, 0.002, 0.15));
+  } else {
+    const body = tone('triangle', 520, t, 0.15); body.frequency.exponentialRampToValueAtTime(300, t + 0.06);   // 鈍い「ボコッ」
+    to(sndOut, body, bq('lowpass', 900), envG(t, 0.6 * v, 0.002, 0.11));
+    to(sndOut, noise(t, 0.05), bq('lowpass', 1200), envG(t, 0.35 * v, 0.001, 0.04));
+    for (const f of [1730, 2640, 3810]) to(sndOut, tone('sine', f, t, 0.1), envG(t, 0.05 * v, 0.001, 0.06));   // フレームの「カン」
+  }
+}
+// 素振りの風切り音：速く振るほど高く強い「ブンッ」
+function whoosh(kmh) {
+  if (!actx || vol() <= 0) return;
+  const t = actx.currentTime, k = clamp((kmh || 60) / 120, 0.2, 1.2);
+  const bp = bq('bandpass', 400 + 300 * k, 1.1); bp.frequency.exponentialRampToValueAtTime(1200 + 1600 * k, t + 0.16);
+  to(sndOut, noise(t, 0.25), bp, envG(t, 0.22 * k * vol(), 0.07, 0.15));
 }
 let flashT = null;
 function flash(color) {
@@ -350,6 +405,7 @@ function fire(power, kmh) {
     $('best').textContent = '自己ベスト ' + bestKmh + ' km/h';
   }
   send(msg);
+  whoosh(kmh);
   $('pow').style.width = (power * 100) + '%';
 }
 
@@ -414,8 +470,7 @@ async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request(
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && sensorsOn) keepAwake(); });
 
 $('go').onclick = async () => {
-  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
-  actx?.resume?.();
+  audioInit();
   const ok = await enableSensors();
   started = true;
   calibPending = true;   // いまの持ち方を「まっすぐ」とする
@@ -430,6 +485,7 @@ $('go').onclick = async () => {
 $('tap').onclick = () => fire(0.6);
 $('vtest').onclick = () => {
   haptic('hit', { q: 2, p: 0.9, o: 0 });
+  audioInit(); racketSound(2, 0.9, 0);
   $('vtestInfo').textContent =
     nativeHaptic ? (nativeV2() ? 'iPhoneアプリ（最新）で振動' : 'iPhoneアプリ（古い版）で振動。Xcodeで入れ直すと細かい振動になります')
     : navigator.vibrate ? 'Androidの振動で再生' : 'このブラウザは振動できません（iPhoneはアプリ版を使ってください）';
@@ -438,7 +494,7 @@ $('view').onclick = () => send({ t: 'view' });
 $('calib').onclick = () => { calibPending = true; $('info').textContent = '今の持ち方を「まっすぐ」にしました'; };
 
 // 設定を覚えておく（使えない環境でも動くように try で囲む）
-for (const id of ['sens', 'flip', 'vstr', 'cue', 'aimSens']) {
+for (const id of ['sens', 'flip', 'vstr', 'cue', 'aimSens', 'svol']) {
   const el = $(id), key = 'racket.' + id;
   try {
     const v = localStorage.getItem(key);
@@ -447,6 +503,7 @@ for (const id of ['sens', 'flip', 'vstr', 'cue', 'aimSens']) {
   el.addEventListener('change', () => {
     try { localStorage.setItem(key, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value); } catch (e) {}
     if (id === 'vstr') haptic('hit', { q: 2, p: 0.8, o: 0 });   // 強さを変えたらその場で確かめられる
+    if (id === 'svol') { audioInit(); racketSound(2, 0.8, 0); }
   });
 }
 if (bestKmh) $('best').textContent = '自己ベスト ' + bestKmh + ' km/h';
